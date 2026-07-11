@@ -29,16 +29,26 @@ ssh ubuntu@<PUBLIC_IP>
 docker version && docker compose version   # 확인
 ```
 
-## 3. 코드 올리기
+## 3. 코드 받기 (git clone — 권장)
 
-**방법 A — 로컬에서 scp (가장 간단)**  ※ 로컬 맥에서 실행:
+GitHub에 올려두면 서버에서 clone 한 줄이면 되고, 이후 코드 변경도 `git pull`로 끝납니다.
 
+**공개(public) 저장소면** — 인증 없이 바로:
 ```bash
-# 프로젝트 폴더 통째로 전송 (.git, __pycache__ 등은 알아서 제외해도 무방)
-scp -r ~/Documents/codexProjects/convenience-stock-watcher ubuntu@<PUBLIC_IP>:~/
+git clone https://github.com/sadadboy/convenience-stock-watcher.git
+cd convenience-stock-watcher
 ```
 
-**방법 B — git** (GitHub 등에 올려둔 경우): `git clone <repo-url>`
+**비공개(private) 저장소면** — Personal Access Token으로:
+```bash
+# GitHub → Settings → Developer settings → Personal access tokens (repo 읽기 권한)
+git clone https://<TOKEN>@github.com/sadadboy/convenience-stock-watcher.git
+cd convenience-stock-watcher
+```
+
+> 이후 코드 업데이트: 서버에서 `git pull && docker compose up --build -d`
+
+*(대안: git 없이 로컬에서 `scp -r ~/Documents/codexProjects/convenience-stock-watcher ubuntu@<PUBLIC_IP>:~/`)*
 
 ## 4. 환경 파일 & 실행
 

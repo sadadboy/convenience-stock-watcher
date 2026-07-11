@@ -1,0 +1,1 @@
+"""Convenience Stock Watcher application."""

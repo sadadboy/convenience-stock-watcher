@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>입고 감시 · Convenience Stock Watcher</title>
+    <style>
+      body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2937; background: #f6f7f9; }
+      main { max-width: 1120px; margin: 0 auto; padding: 32px 20px; }
+      nav { margin-bottom: 20px; display: flex; gap: 16px; }
+      a { color: #2563eb; text-decoration: none; }
+      h1 { margin: 0 0 6px; font-size: 28px; }
+      .subtitle { margin: 0 0 20px; color: #6b7280; }
+      .panel { border: 1px solid #dfe3e8; border-radius: 8px; padding: 16px; background: #fff; margin-bottom: 16px; }
+      .panel h2 { margin: 0 0 12px; font-size: 16px; }
+      label { display: block; margin: 12px 0 6px; font-size: 14px; font-weight: 600; }
+      input, select { box-sizing: border-box; width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 12px; font: inherit; background: #fff; }
+      button { border: 0; border-radius: 8px; padding: 9px 12px; font: inherit; font-weight: 700; color: #fff; background: #1f2937; cursor: pointer; }
+      button.secondary { color: #1f2937; background: #e5e7eb; }
+      .submit { width: 100%; margin-top: 14px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr 160px; gap: 12px; align-items: end; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #e5e7eb; padding: 10px 8px; text-align: left; vertical-align: top; font-size: 14px; }
+      th { color: #4b5563; font-size: 13px; }
+      .muted { color: #6b7280; font-size: 13px; }
+      .badge { display: inline-flex; border-radius: 999px; padding: 3px 8px; font-size: 12px; font-weight: 700; }
+      .active { color: #065f46; background: #d1fae5; }
+      .paused { color: #92400e; background: #fef3c7; }
+      .failed { color: #7f1d1d; background: #fee2e2; }
+      .disabled { color: #374151; background: #e5e7eb; }
+      .stock { color: #075985; background: #e0f2fe; }
+      .empty { color: #92400e; background: #fef3c7; }
+      .restock { color: #065f46; background: #d1fae5; }
+      .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+      .inline-form { display: inline; }
+      .warn { border: 1px solid #fecaca; background: #fef2f2; color: #7f1d1d; border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
+      .ok-banner { border: 1px solid #a7f3d0; background: #ecfdf5; color: #065f46; border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
+      .danger { color: #7f1d1d; background: #fee2e2; }
+      .group { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+      .group-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+      .group-progress { margin: 8px 0 0; font-weight: 600; }
+      .group details { margin-top: 10px; }
+      .group summary { cursor: pointer; }
+      .group-settings { margin-top: 8px; }
+      .settings-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
+      .settings-form label { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; gap: 4px; }
+      .settings-form input { width: 120px; }
+      .stock-toolbar { display: flex; gap: 10px; align-items: center; }
+      code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+      @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><a href="/">← Dashboard</a><a href="/products">Products</a><a href="/watches">Watches</a></nav>
+      <h1>입고 감시</h1>
+      <p class="subtitle">저장된 상품코드를 주기적으로 조회해 재고가 잡히는 순간 알림(화면 + 디스코드)합니다.</p>
+
+      {% if not watcher_enabled %}
+        <div class="warn">스케줄러가 꺼져 있습니다 (WATCHER_ENABLED=false). 자동 조회가 실행되지 않습니다. "지금 확인"으로 수동 조회만 가능합니다.</div>
+      {% endif %}
+
+      {% if test_result == 'ok' %}
+        <div class="ok-banner">✅ 디스코드 테스트 알림을 보냈습니다. 디스코드 채널을 확인하세요.</div>
+      {% elif test_result == 'fail' %}
+        <div class="warn">디스코드 전송에 실패했습니다. 웹훅 URL을 다시 확인하세요.</div>
+      {% elif test_result == 'nourl' %}
+        <div class="warn">먼저 디스코드 웹훅 URL을 저장하세요.</div>
+      {% endif %}
+
+      <section class="panel">
+        <h2>🔔 디스코드 알림 설정</h2>
+        {% if discord_configured %}
+          <p class="muted">현재 설정됨: <code>{{ discord_masked }}</code> · 입고 감지 시 이 채널로 푸시됩니다.</p>
+        {% else %}
+          <p class="muted">웹훅 URL을 넣으면 입고 순간 디스코드로 알림이 옵니다. (디스코드 채널 설정 → 연동 → 웹훅 → URL 복사)</p>
+        {% endif %}
+        <div class="stock-toolbar">
+          <form method="post" action="/watches/notifications/discord" style="flex:1; display:flex; gap:8px;">
+            <input name="webhook_url" placeholder="https://discord.com/api/webhooks/..." style="flex:1;">
+            <button type="submit">저장</button>
+          </form>
+          {% if discord_configured %}
+            <form method="post" action="/watches/notifications/discord/test">
+              <button class="secondary" type="submit">테스트 전송</button>
+            </form>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>감시 추가</h2>
+        {% if sources %}
+          <form method="post" action="/watches">
+            <label for="product_source_id">감시할 상품코드</label>
+            <select id="product_source_id" name="product_source_id" required>
+              {% for source in sources %}
+                <option value="{{ source.id }}">
+                  [{{ source.brand }}] {{ source.product.display_name }} · {{ source.external_product_name }} ({{ source.external_product_code }})
+                </option>
+              {% endfor %}
+            </select>
+
+            <div class="grid">
+              <div>
+                <label for="location_query">위치</label>
+                <input id="location_query" name="location_query" placeholder="매장 키워드 예: 강남 / GS25는 위도,경도,반경m" required>
+              </div>
+              <div>
+                <label>참고 (브랜드별 위치 형식)</label>
+                <div class="muted">
+                  세븐일레븐·이마트24: 매장 키워드(강남, 동작구청)<br>
+                  GS25: 위도,경도,반경m (37.5665,126.978,1000)
+                </div>
+              </div>
+              <div>
+                <label for="check_interval_seconds">조회 간격(초)</label>
+                <input id="check_interval_seconds" name="check_interval_seconds" type="number" min="30" value="{{ default_interval }}" required>
+              </div>
+            </div>
+
+            <button class="submit" type="submit">감시 시작</button>
+          </form>
+        {% else %}
+          <p class="muted">감시하려면 먼저 <a href="/products">상품</a>에서 편의점 상품코드를 저장하세요.</p>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <h2>감시 목록 (상품별)</h2>
+        {% if groups %}
+          {% for g in groups %}
+            <div class="group">
+              <div class="group-head">
+                <div>
+                  <strong>{{ g.product.display_name }}</strong>
+                  <span class="muted">· 상품코드 {{ g.total }}개
+                    {% if g.in_stock %}· <span class="badge stock">재고있음 {{ g.in_stock }}</span>{% endif %}
+                    {% if g.failed %}· <span class="badge failed">실패 {{ g.failed }}</span>{% endif %}
+                    {% if g.paused %}· <span class="badge paused">중지 {{ g.paused }}</span>{% endif %}
+                  </span>
+                  <div class="muted">위치: {{ g.location_query }}{% if g.has_coords and g.radius_meters %} · 반경 {{ (g.radius_meters / 1000)|round(1) }}km{% endif %}</div>
+                </div>
+                <div class="actions">
+                  <button type="button" onclick="checkGroup(this, '{{ g.watch_ids|replace(',', '_') }}')"
+                          data-watch-ids="{{ g.watch_ids }}">지금 전체 확인</button>
+                  <form class="inline-form" method="post" action="/watches/group/resume">
+                    <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="secondary" type="submit">전체 재개</button></form>
+                  <form class="inline-form" method="post" action="/watches/group/pause">
+                    <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="secondary" type="submit">전체 중지</button></form>
+                  <form class="inline-form" method="post" action="/watches/group/delete"
+                        onsubmit="return confirm('이 그룹 감시 {{ g.total }}개를 모두 삭제할까요?');">
+                    <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="danger" type="submit">전체 삭제</button></form>
+                </div>
+              </div>
+              <div class="group-progress muted" id="prog-{{ g.watch_ids|replace(',', '_') }}"></div>
+              <details class="group-settings">
+                <summary class="muted">⚙️ 설정 (조회 간격 · 최대 알림)</summary>
+                <form method="post" action="/watches/group/settings" class="settings-form">
+                  <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}">
+                  <label>조회 간격(초)
+                    <input name="check_interval_seconds" type="number" min="30" value="{{ g.interval }}">
+                  </label>
+                  <label>최대 알림 횟수
+                    <input name="max_alert_count" type="number" min="1" value="{{ g.max_alert_count }}">
+                  </label>
+                  <button type="submit">저장</button>
+                </form>
+                <p class="muted" style="margin:6px 0 0;">간격을 바꾸면 이 그룹의 조회 시각이 다시 고르게 분산됩니다. 재고 발견 시 최대 {{ g.max_alert_count }}회 알림 후 잠시 멈춥니다.</p>
+              </details>
+              <details>
+                <summary class="muted">개별 상품코드 {{ g.total }}개 펼치기</summary>
+                <table>
+                  <thead><tr><th>상품코드</th><th>상태</th><th>최근 재고</th><th>동작</th></tr></thead>
+                  <tbody>
+                    {% for w in g.watches %}
+                      <tr id="watch-row-{{ w.id }}">
+                        <td>[{{ w.source.brand }}] {{ w.source.external_product_name }}<div class="muted">{{ w.source.external_product_code }} · 간격 {{ w.check_interval_seconds }}s</div></td>
+                        <td class="w-status"><span class="badge {{ w.status }}">{{ w.status }}</span></td>
+                        <td class="w-stock">
+                          {% if w.last_stock_status == 'in_stock' %}<span class="badge stock">재고 {{ w.last_stock_quantity }}개</span><div class="muted">{{ w.last_in_stock_summary }}</div>
+                          {% elif w.last_stock_status == 'out_of_stock' %}<span class="badge empty">없음</span>
+                          {% elif w.last_error %}<span class="badge failed">실패</span>
+                          {% else %}<span class="muted">미조회</span>{% endif %}
+                          {% if w.last_checked_at %}<div class="muted">{{ w.last_checked_at.strftime('%m-%d %H:%M') }} 조회</div>{% endif %}
+                        </td>
+                        <td>
+                          <div class="actions">
+                            <form class="inline-form" method="post" action="/watches/{{ w.id }}/check"><button type="submit">확인</button></form>
+                            {% if w.status == 'disabled' %}
+                              <form class="inline-form" method="post" action="/watches/{{ w.id }}/resume"><button type="submit">재개</button></form>
+                            {% else %}
+                              <form class="inline-form" method="post" action="/watches/{{ w.id }}/pause"><button class="secondary" type="submit">중지</button></form>
+                            {% endif %}
+                            <form class="inline-form" method="post" action="/watches/{{ w.id }}/delete"><button class="secondary" type="submit">삭제</button></form>
+                          </div>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </details>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="muted">아직 감시가 없습니다. 상품 화면에서 "🔔 이 상품 전체 감시"로 한 번에 등록하거나, 위에서 개별 추가하세요.</p>
+        {% endif %}
+      </section>
+
+      <script>
+        async function checkGroup(btn, progKey) {
+          const ids = (btn.dataset.watchIds || '').split(',').filter(Boolean);
+          if (!ids.length) return;
+          const prog = document.getElementById('prog-' + progKey);
+          btn.disabled = true;
+          let done = 0, restocked = 0;
+          prog.textContent = `조회 중… 0/${ids.length}`;
+
+          const queue = ids.slice();
+          async function worker() {
+            while (queue.length) {
+              const id = queue.shift();
+              try {
+                const r = await fetch(`/watches/${id}/check.json`, { method: 'POST' });
+                const d = await r.json();
+                if (d.stock_status === 'in_stock') restocked += 1;
+                updateRow(id, d);
+              } catch (e) { /* keep going */ }
+              done += 1;
+              prog.textContent = `조회 중… ${done}/${ids.length}` + (restocked ? ` · 🔔 재고 발견 ${restocked}` : '');
+            }
+          }
+          await Promise.all([worker(), worker(), worker()]); // concurrency 3
+          prog.textContent = `완료 — ${ids.length}개 확인` + (restocked ? ` · 🔔 재고 발견 ${restocked}곳` : ' · 재고 없음') + '. 새로고침합니다…';
+          setTimeout(() => window.location.reload(), 1200);
+        }
+
+        function updateRow(id, d) {
+          const row = document.getElementById('watch-row-' + id);
+          if (!row) return;
+          const st = row.querySelector('.w-stock');
+          if (!st) return;
+          if (d.stock_status === 'in_stock') st.innerHTML = `<span class="badge stock">재고 ${d.quantity}개</span><div class="muted">${(d.summary||'')}</div>`;
+          else if (d.stock_status === 'out_of_stock') st.innerHTML = '<span class="badge empty">없음</span>';
+          else st.innerHTML = `<span class="badge failed">실패</span>`;
+        }
+      </script>
+
+      <section class="panel">
+        <h2>최근 이벤트 / 알림</h2>
+        {% if events %}
+          <table>
+            <thead>
+              <tr><th>시각</th><th>상품</th><th>구분</th><th>내용</th></tr>
+            </thead>
+            <tbody>
+              {% for e in events %}
+                <tr>
+                  <td class="muted">{{ e.created_at.strftime('%m-%d %H:%M:%S') }}</td>
+                  <td class="muted">[{{ e.watch.source.brand }}] {{ e.watch.source.product.display_name }}</td>
+                  <td>
+                    {% if e.kind == 'restock' %}<span class="badge restock">🔔 입고</span>
+                    {% elif e.kind == 'error' %}<span class="badge failed">오류</span>
+                    {% else %}<span class="badge disabled">조회</span>{% endif %}
+                  </td>
+                  <td>{{ e.message }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="muted">아직 이벤트가 없습니다.</p>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

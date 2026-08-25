@@ -57,12 +57,31 @@ class Settings(BaseSettings):
     emart24_store_limit: int = 30
     emart24_default_store_keyword: str = "강남"
 
+    # Kyobo Book (교보문고). Search scrapes the public results page (no JSON search
+    # API exists); stock uses the public location-inventory API, which returns
+    # every store nationwide in one call, so there is no radius/coords mode.
+    kyobobook_search_enabled: bool = True
+    kyobobook_search_base_url: str = "https://search.kyobobook.co.kr"
+    kyobobook_search_path: str = "/search"
+    kyobobook_search_limit: int = 20
+
+    kyobobook_stock_enabled: bool = True
+    kyobobook_product_base_url: str = "https://product.kyobobook.co.kr"
+    kyobobook_inventory_path: str = "/api/gw/pdt/product/{product_code}/location-inventory"
+    # Blank keeps all stores; set a name/address fragment to narrow (e.g. "강남").
+    kyobobook_default_store_keyword: str = ""
+
     # Restock watcher scheduler.
     watcher_enabled: bool = True
     watcher_poll_seconds: int = 60
     watcher_default_interval_seconds: int = 300
     # Max watches checked per scheduler tick (bounds API bursts at scale).
-    watcher_max_checks_per_tick: int = 25
+    # A tick must finish inside watcher_poll_seconds, and the cap must cover
+    # (watch count / check interval) * poll seconds or checks fall behind.
+    watcher_max_checks_per_tick: int = 120
+    # How many stock lookups run at once within a tick. Lookups are pure network
+    # I/O, so running them serially was what pushed a tick past the poll window.
+    watcher_concurrency: int = 12
 
     # Discord push alerts. Fallback if no webhook is saved in the UI.
     discord_webhook_url: str = ""

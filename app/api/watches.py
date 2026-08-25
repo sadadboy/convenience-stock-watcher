@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.templating import templates
 from app.domain.alerts import WatchStatus
 from app.repositories.notifications import get_discord_webhook, set_discord_webhook
 from app.repositories.watches import (
@@ -25,13 +25,13 @@ from app.services.store_adapter import StoreBrand
 from app.services.watcher import check_watch
 
 router = APIRouter(prefix="/watches", tags=["watches"])
-templates = Jinja2Templates(directory="app/templates")
 
 # How each brand scopes a watch location (for UI hints).
 LOCATION_MODES = {
     StoreBrand.SEVEN_ELEVEN.value: "매장 키워드 (예: 강남, 동작구청)",
     StoreBrand.EMART24.value: "매장 키워드 (예: 강남, 동작구청)",
     StoreBrand.GS25.value: "위도,경도,반경m (예: 37.5665,126.978,1000)",
+    StoreBrand.KYOBOBOOK.value: "매장 이름/주소 일부 (비우면 전국 37개 매장)",
 }
 
 

@@ -8,6 +8,12 @@ services:
       - "${APP_PORT:-8000}:8000"
     env_file:
       - .env
+    # The host's primary resolver (1.214.68.2) is unreachable from inside the
+    # container, so Docker's embedded resolver burned ~4s per lookup timing out
+    # before it fell back. Point at resolvers the container can actually reach.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       db:
         condition: service_healthy

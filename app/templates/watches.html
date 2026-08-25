@@ -182,7 +182,7 @@
                           {% elif w.last_stock_status == 'out_of_stock' %}<span class="badge empty">없음</span>
                           {% elif w.last_error %}<span class="badge failed">실패</span>
                           {% else %}<span class="muted">미조회</span>{% endif %}
-                          {% if w.last_checked_at %}<div class="muted">{{ w.last_checked_at.strftime('%m-%d %H:%M') }} 조회</div>{% endif %}
+                          {% if w.last_checked_at %}<div class="muted">{{ w.last_checked_at | kst('%m-%d %H:%M') }} 조회</div>{% endif %}
                         </td>
                         <td>
                           <div class="actions">
@@ -255,9 +255,14 @@
             </thead>
             <tbody>
               {% for e in events %}
+                {% set src = e.watch.source %}
+                {# Identify the individual source (code), not just its product group. #}
+                {% set label = src.external_product_name or src.product.display_name or src.external_product_code %}
                 <tr>
-                  <td class="muted">{{ e.created_at.strftime('%m-%d %H:%M:%S') }}</td>
-                  <td class="muted">[{{ e.watch.source.brand }}] {{ e.watch.source.product.display_name }}</td>
+                  <td class="muted">{{ e.created_at | kst('%m-%d %H:%M:%S') }}</td>
+                  <td class="muted">[{{ src.brand }}] {{ label }}
+                    <div class="muted">{% if src.product.display_name != label %}{{ src.product.display_name }} · {% endif %}{{ src.external_product_code }}</div>
+                  </td>
                   <td>
                     {% if e.kind == 'restock' %}<span class="badge restock">🔔 입고</span>
                     {% elif e.kind == 'error' %}<span class="badge failed">오류</span>

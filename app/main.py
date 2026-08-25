@@ -3,21 +3,19 @@ from collections.abc import AsyncIterator
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.api.health import router as health_router
 from app.api.products import router as products_router
 from app.api.watches import router as watches_router
 from app.core.config import settings
+from app.core.templating import templates
 from app.db.init_db import init_db
 from app.db.session import get_db
 from app.repositories.notifications import get_discord_webhook
 from app.repositories.products import list_products
 from app.repositories.watches import list_watches
 from app.services.scheduler import start_scheduler, stop_scheduler
-
-templates = Jinja2Templates(directory="app/templates")
 
 
 @asynccontextmanager

@@ -2,10 +2,10 @@ import asyncio
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.templating import templates
 from app.db.session import get_db
 from app.repositories.products import (
     create_product,
@@ -24,17 +24,18 @@ from app.repositories.location import (
 )
 from app.schemas.product import ProductCreate, ProductSourceCreate
 from app.core.config import settings
-from app.services.adapters import SEARCH_BRANDS, search_products, search_products_page
+from app.services.adapters import (
+    SEARCH_BRANDS,
+    check_stock,
+    search_products,
+    search_products_page,
+)
 from app.repositories.watches import create_watches_for_product
 from app.services.geocoding import reverse_geocode_keyword
-from app.services.adapters.emart24 import check_emart24_stock
-from app.services.adapters.gs25 import check_gs25_stock
-from app.services.adapters.seven_eleven import check_seveneleven_stock
 from app.services.mock_inventory import check_mock_inventory
-from app.services.store_adapter import StoreBrand
+from app.services.store_adapter import NATIONWIDE_BRANDS, StoreBrand
 
 router = APIRouter(prefix="/products", tags=["products"])
-templates = Jinja2Templates(directory="app/templates")
 
 # Brands whose saved sources show a real-time stock button (and how they scope
 # the query): "coords" uses lat/lon/radius, "store_keyword" uses a store search.
@@ -42,6 +43,10 @@ STOCK_BRAND_MODES = {
     StoreBrand.GS25.value: "coords",
     StoreBrand.SEVEN_ELEVEN.value: "store_keyword",
     StoreBrand.EMART24.value: "store_keyword",
+    # Kyobo has ~37 named branches nationwide and one call returns them all, so a
+    # 구-level keyword (what the shared location picker yields) means nothing to
+    # it. Default to nationwide; a watch can still name a branch explicitly.
+    StoreBrand.KYOBOBOOK.value: "nationwide",
 }
 
 
@@ -113,32 +118,14 @@ def _resolve_location(db: Session, submitted_keyword: str | None) -> tuple[str, 
 
 async def _lookup_source_stock(source, keyword, latitude, longitude, radius_meters):
     """Dispatch a stock lookup for one saved source by brand."""
-    if source.brand == StoreBrand.SEVEN_ELEVEN.value:
-        return await check_seveneleven_stock(
-            source.external_product_code,
-            store_keyword=keyword,
-            latitude=latitude,
-            longitude=longitude,
-            radius_meters=radius_meters,
-        )
-    if source.brand == StoreBrand.EMART24.value:
-        return await check_emart24_stock(
-            source.external_product_code,
-            store_keyword=keyword,
-            latitude=latitude,
-            longitude=longitude,
-            radius_meters=radius_meters,
-        )
-    if source.brand == StoreBrand.GS25.value:
-        if latitude is not None and longitude is not None:
-            return await check_gs25_stock(
-                source.external_product_code,
-                latitude=latitude,
-                longitude=longitude,
-                radius_meters=radius_meters,
-            )
-        return await check_gs25_stock(source.external_product_code)
-    return None
+    return await check_stock(
+        source.brand,
+        source.external_product_code,
+        store_keyword=keyword,
+        latitude=latitude,
+        longitude=longitude,
+        radius_meters=radius_meters,
+    )
 
 
 @router.get("", response_class=HTMLResponse)
@@ -385,14 +372,14 @@ async def create_product_source_action(
     return RedirectResponse(url=f"/products/{product_id}", status_code=303)
 
 
-def _find_source(product, source_id: int, expected_brand: StoreBrand):
+def _find_source(product, source_id: int, expected_brand: StoreBrand | None = None):
     source = next(
         (candidate for candidate in product.sources if candidate.id == source_id),
         None,
     )
     if source is None:
         raise HTTPException(status_code=404, detail="Product source not found")
-    if source.brand != expected_brand.value:
+    if expected_brand is not None and source.brand != expected_brand.value:
         raise HTTPException(
             status_code=400,
             detail=f"{expected_brand.value} 재고 조회는 {expected_brand.value} 상품코드에만 가능합니다.",
@@ -400,77 +387,26 @@ def _find_source(product, source_id: int, expected_brand: StoreBrand):
     return source
 
 
-@router.post("/{product_id}/sources/{source_id}/gs25-stock", response_class=HTMLResponse)
-async def gs25_stock_action(
+@router.post("/{product_id}/sources/{source_id}/stock", response_class=HTMLResponse)
+async def source_stock_action(
     product_id: int,
     source_id: int,
     request: Request,
     store_keyword: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    """Run a real-time stock lookup for one saved source, whatever its brand."""
     product = get_product(db, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    source = _find_source(product, source_id, StoreBrand.GS25)
-    _, latitude, longitude, radius = _resolve_location(db, store_keyword)
-    if latitude is not None and longitude is not None:
-        stock = await check_gs25_stock(
-            source.external_product_code,
-            latitude=latitude,
-            longitude=longitude,
-            radius_meters=radius,
-        )
-    else:
-        stock = await check_gs25_stock(source.external_product_code)
-    return _render_product_detail(request, product, db, stock=stock, stock_source_id=source_id)
-
-
-@router.post("/{product_id}/sources/{source_id}/seveneleven-stock", response_class=HTMLResponse)
-async def seveneleven_stock_action(
-    product_id: int,
-    source_id: int,
-    request: Request,
-    store_keyword: str = Form(""),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    product = get_product(db, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    source = _find_source(product, source_id, StoreBrand.SEVEN_ELEVEN)
+    source = _find_source(product, source_id)
     keyword, latitude, longitude, radius = _resolve_location(db, store_keyword)
-    stock = await check_seveneleven_stock(
-        source.external_product_code,
-        store_keyword=keyword,
-        latitude=latitude,
-        longitude=longitude,
-        radius_meters=radius,
-    )
-    return _render_product_detail(request, product, db, stock=stock, stock_source_id=source_id)
-
-
-@router.post("/{product_id}/sources/{source_id}/emart24-stock", response_class=HTMLResponse)
-async def emart24_stock_action(
-    product_id: int,
-    source_id: int,
-    request: Request,
-    store_keyword: str = Form(""),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    product = get_product(db, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-
-    source = _find_source(product, source_id, StoreBrand.EMART24)
-    keyword, latitude, longitude, radius = _resolve_location(db, store_keyword)
-    stock = await check_emart24_stock(
-        source.external_product_code,
-        store_keyword=keyword,
-        latitude=latitude,
-        longitude=longitude,
-        radius_meters=radius,
-    )
+    if source.brand in NATIONWIDE_BRANDS and not store_keyword.strip():
+        # Don't let the shared 구-level location leak into a nationwide brand;
+        # an explicitly typed keyword still narrows it.
+        keyword, latitude, longitude, radius = "", None, None, None
+    stock = await _lookup_source_stock(source, keyword, latitude, longitude, radius)
     return _render_product_detail(request, product, db, stock=stock, stock_source_id=source_id)
 
 

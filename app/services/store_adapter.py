@@ -22,6 +22,13 @@ class StoreBrand(StrEnum):
     CU = "cu"
     SEVEN_ELEVEN = "seveneleven"
     EMART24 = "emart24"
+    KYOBOBOOK = "kyobobook"
+
+
+# Brands whose stock lookup covers every store in one call. They have a handful
+# of named branches rather than a dense 구/반경 footprint, so the shared location
+# picker's keyword means nothing to them and must not be applied.
+NATIONWIDE_BRANDS = {StoreBrand.KYOBOBOOK.value}
 
 
 @dataclass(frozen=True)

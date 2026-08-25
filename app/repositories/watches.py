@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.domain.alerts import WatchStatus
 from app.models.product import Product, ProductSource
 from app.models.restock import StockWatch, StockWatchEvent
+from app.services.store_adapter import NATIONWIDE_BRANDS
 
 
 def list_watches(db: Session) -> list[StockWatch]:
@@ -109,14 +110,17 @@ def create_watches_for_product(
     # Spread first checks evenly across the interval so they don't burst together.
     step = check_interval_seconds / len(to_create) if to_create else 0
     for i, source in enumerate(to_create):
+        # Nationwide brands (Kyobo) have named branches, not a 구/반경 scope, so
+        # the shared location would only ever fail to match. Watch them nationwide.
+        nationwide = source.brand in NATIONWIDE_BRANDS
         db.add(
             StockWatch(
                 product_source_id=source.id,
-                location_query=keyword,
+                location_query="" if nationwide else keyword,
                 check_interval_seconds=check_interval_seconds,
-                latitude=latitude,
-                longitude=longitude,
-                radius_meters=radius_meters,
+                latitude=None if nationwide else latitude,
+                longitude=None if nationwide else longitude,
+                radius_meters=None if nationwide else radius_meters,
                 status=WatchStatus.ACTIVE.value,
                 next_check_at=now + timedelta(seconds=step * i),
             )

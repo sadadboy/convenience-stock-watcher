@@ -471,7 +471,7 @@
         <section class="panel">
           <h2>편의점 상품코드 추가</h2>
 
-          <label for="search_brand">편의점</label>
+          <label for="search_brand">브랜드</label>
           <select id="search_brand">
             {% for brand in search_brands %}
               <option value="{{ brand.value }}" {% if brand.value == 'emart24' %}selected{% endif %}>{{ brand.value }}</option>
@@ -489,7 +489,7 @@
           <details class="manual">
             <summary>상품코드 직접 입력</summary>
             <form method="post" action="/products/{{ product.id }}/sources">
-              <label for="brand">편의점</label>
+              <label for="brand">브랜드</label>
               <select id="brand" name="brand" required>
                 {% for brand in brands %}
                   <option value="{{ brand.value }}">{{ brand.value }}</option>
@@ -569,16 +569,9 @@
                     </td>
                     <td>
                       <div class="actions">
-                        {% if stock_brand_modes.get(source.brand) == 'coords' %}
-                          <form class="inline-form" method="post" action="/products/{{ product.id }}/sources/{{ source.id }}/gs25-stock">
-                            <input type="hidden" name="latitude" value="{{ gs25_default_latitude }}">
-                            <input type="hidden" name="longitude" value="{{ gs25_default_longitude }}">
-                            <input type="hidden" name="radius_meters" value="{{ gs25_default_radius_meters }}">
-                            <button type="submit">재고 조회</button>
-                          </form>
-                        {% elif stock_brand_modes.get(source.brand) == 'store_keyword' %}
-                          <form class="inline-form" method="post" action="/products/{{ product.id }}/sources/{{ source.id }}/{{ source.brand }}-stock"
-                                onsubmit="this.store_keyword.value = document.getElementById('stock_location').value;">
+                        {% if stock_brand_modes.get(source.brand) %}
+                          <form class="inline-form" method="post" action="/products/{{ product.id }}/sources/{{ source.id }}/stock"
+                                {% if stock_brand_modes.get(source.brand) != 'nationwide' %}onsubmit="this.store_keyword.value = document.getElementById('stock_location').value;"{% endif %}>
                             <input type="hidden" name="store_keyword">
                             <button type="submit">재고 조회</button>
                           </form>
@@ -766,6 +759,23 @@
 
       function escapeHtml(s) { return (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
       function escapeAttr(s) { return escapeHtml(s).replace(/'/g, '&#39;'); }
+
+      // ---- Remember the chosen search brand ----
+      // Registering a code reloads this page, which would otherwise snap the
+      // selector back to its hardcoded default. Keep the last pick per browser
+      // until the user changes it.
+      (function stickySearchBrand() {
+        const KEY = 'csw.searchBrand';
+        const sel = document.getElementById('search_brand');
+        if (!sel) return;
+        try {
+          const saved = localStorage.getItem(KEY);
+          if (saved && [...sel.options].some((o) => o.value === saved)) sel.value = saved;
+        } catch (e) { /* storage blocked (private mode): keep the default */ }
+        sel.addEventListener('change', () => {
+          try { localStorage.setItem(KEY, sel.value); } catch (e) { /* ignore */ }
+        });
+      })();
 
       // ---- Map picker (Leaflet) ----
       let _map = null, _marker = null, _circle = null, _picked = null;

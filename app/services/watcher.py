@@ -23,11 +23,9 @@ from app.domain.alerts import (
 )
 from app.models.restock import StockWatch, StockWatchEvent
 from app.repositories.notifications import get_discord_webhook
-from app.services.adapters.emart24 import check_emart24_stock
-from app.services.adapters.gs25 import check_gs25_stock
-from app.services.adapters.seven_eleven import check_seveneleven_stock
+from app.services.adapters import check_stock
 from app.services.notifications import send_discord_message
-from app.services.store_adapter import StockLookup, StoreBrand
+from app.services.store_adapter import StockLookup
 
 logger = logging.getLogger(__name__)
 
@@ -51,28 +49,31 @@ def _push_discord(db: Session, source, summary: str, result: StockLookup) -> Non
 async def _lookup_stock(watch: StockWatch) -> StockLookup | None:
     """Dispatch to the right brand adapter using the watch's location. None if unsupported."""
     source = watch.source
-    code = source.external_product_code
-    keyword = watch.location_query
-    lat, lon, radius = watch.latitude, watch.longitude, watch.radius_meters
-
-    if source.brand == StoreBrand.SEVEN_ELEVEN.value:
-        return await check_seveneleven_stock(
-            code, store_keyword=keyword, latitude=lat, longitude=lon, radius_meters=radius
-        )
-    if source.brand == StoreBrand.EMART24.value:
-        return await check_emart24_stock(
-            code, store_keyword=keyword, latitude=lat, longitude=lon, radius_meters=radius
-        )
-    if source.brand == StoreBrand.GS25.value:
-        if lat is not None and lon is not None:
-            return await check_gs25_stock(code, latitude=lat, longitude=lon, radius_meters=radius)
-        return await check_gs25_stock(code)
-    return None
+    return await check_stock(
+        source.brand,
+        source.external_product_code,
+        store_keyword=watch.location_query,
+        latitude=watch.latitude,
+        longitude=watch.longitude,
+        radius_meters=watch.radius_meters,
+    )
 
 
-def _summarize(result: StockLookup, limit: int = 5) -> str:
+def _summarize(result: StockLookup, limit: int = 5, *, fallback_price: int | None = None) -> str:
+    """Render the in-stock stores with their price.
+
+    GS25 returns a per-store price; 7-Eleven and Emart24 do not, so those fall
+    back to ``fallback_price`` (the price captured when the product code was
+    mapped), which for those brands is a fixed nationwide price.
+    """
     in_stock = [s for s in result.stores if s.in_stock]
-    parts = [f"{s.store_name or s.store_code} {s.quantity}개" for s in in_stock[:limit]]
+    parts = []
+    for s in in_stock[:limit]:
+        label = f"{s.store_name or s.store_code} {s.quantity}개"
+        price = s.price or fallback_price
+        if price:
+            label += f" ({price:,}원)"
+        parts.append(label)
     extra = len(in_stock) - len(parts)
     if extra > 0:
         parts.append(f"외 {extra}곳")
@@ -82,8 +83,18 @@ def _summarize(result: StockLookup, limit: int = 5) -> str:
 def check_watch(db: Session, watch: StockWatch, *, now: datetime | None = None) -> StockWatchEvent:
     """Run one stock check for a watch, update it, and record an event."""
     now = now or datetime.now(timezone.utc)
+    return _apply_result(db, watch, asyncio.run(_lookup_stock(watch)), now=now)
+
+
+def _apply_result(
+    db: Session,
+    watch: StockWatch,
+    result: StockLookup | None,
+    *,
+    now: datetime,
+) -> StockWatchEvent:
+    """Persist one lookup result: update the watch, record an event, alert."""
     source = watch.source
-    result = asyncio.run(_lookup_stock(watch))
 
     watch.last_checked_at = now
     watch.next_retry_at = None
@@ -111,7 +122,7 @@ def check_watch(db: Session, watch: StockWatch, *, now: datetime | None = None) 
     total_qty = result.total_quantity
 
     if in_stock:
-        summary = _summarize(result)
+        summary = _summarize(result, fallback_price=source.price)
         decision = decide_stock_found(
             current_alert_count=watch.alert_count,
             max_alert_count=watch.max_alert_count,
@@ -158,8 +169,28 @@ def check_watch(db: Session, watch: StockWatch, *, now: datetime | None = None) 
     return event
 
 
+async def _lookup_many(watches: list[StockWatch]) -> list[StockLookup | None | BaseException]:
+    """Look up every watch concurrently, bounded by ``watcher_concurrency``.
+
+    The lookups are pure network I/O, so running them one at a time made a tick
+    take longer than the poll interval. Exceptions come back in place of a
+    result so one bad watch cannot sink the whole tick.
+    """
+    limit = max(settings.watcher_concurrency, 1)
+    semaphore = asyncio.Semaphore(limit)
+
+    async def one(watch: StockWatch) -> StockLookup | None:
+        async with semaphore:
+            return await _lookup_stock(watch)
+
+    return await asyncio.gather(*(one(w) for w in watches), return_exceptions=True)
+
+
 def run_due_watches(db: Session, *, now: datetime | None = None) -> int:
     """Check due watches, capped per tick to spread load. Returns the number checked.
+
+    Lookups for the whole batch run concurrently; the results are then applied to
+    the DB one at a time, since the Session is not thread-safe.
 
     When more watches are due than ``watcher_max_checks_per_tick``, only the
     most-overdue ones run this tick; the rest are picked up on later ticks, which
@@ -178,16 +209,27 @@ def run_due_watches(db: Session, *, now: datetime | None = None) -> int:
     cap = settings.watcher_max_checks_per_tick
     if cap and cap > 0:
         due = due[:cap]
+    if not due:
+        return 0
 
-    checked = 0
     for watch in due:
         if watch.status == WatchStatus.PAUSED.value:
             # Resume a paused watch whose pause window elapsed.
             watch.status = WatchStatus.ACTIVE.value
             watch.paused_until = None
             watch.alert_count = 0
+
+    results = asyncio.run(_lookup_many(due))
+
+    checked = 0
+    for watch, result in zip(due, results):
+        if isinstance(result, BaseException):
+            # Unexpected: adapters already turn network errors into ok=False.
+            # Leave the watch untouched so it is retried on the next tick.
+            logger.exception("watch %s lookup crashed", watch.id, exc_info=result)
+            continue
         try:
-            check_watch(db, watch, now=now)
+            _apply_result(db, watch, result, now=now)
             checked += 1
         except Exception:  # noqa: BLE001 - never let one watch break the loop
             db.rollback()

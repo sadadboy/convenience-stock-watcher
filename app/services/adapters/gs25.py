@@ -206,6 +206,9 @@ async def check_gs25_stock(
             stores=stores or [],
             error=error,
             context=context,
+            # One call returns every store in radius (sold out and 0 included),
+            # so the scanned set is exactly what we render.
+            scanned_stores=stores or [],
         )
 
     if not code:

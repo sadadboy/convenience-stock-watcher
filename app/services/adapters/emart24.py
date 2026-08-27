@@ -26,6 +26,7 @@ from app.services.store_adapter import (
     StoreCandidate,
     StoreStock,
     haversine_m,
+    scanned_sort_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -252,7 +253,13 @@ async def check_emart24_stock(
         f"'{keyword}' 반경 {radius_meters}m" if use_radius else f"매장 검색 '{keyword}'"
     )
 
-    def _result(*, ok: bool, stores: list[StoreStock] | None = None, error: str | None = None):
+    def _result(
+        *,
+        ok: bool,
+        stores: list[StoreStock] | None = None,
+        error: str | None = None,
+        scanned: list[StoreStock] | None = None,
+    ):
         return StockLookup(
             checked_at=now,
             brand=StoreBrand.EMART24,
@@ -261,6 +268,7 @@ async def check_emart24_stock(
             stores=stores or [],
             error=error,
             context=context,
+            scanned_stores=scanned or [],
         )
 
     if not code:
@@ -290,30 +298,34 @@ async def check_emart24_stock(
         logger.warning("Emart24 stock lookup returned invalid JSON for pluCd %s: %s", code, exc)
         return _result(ok=False, error="Emart24 재고 응답을 해석하지 못했습니다.")
 
+    # Stores missing from the response don't carry the SKU (the API does return
+    # BIZQTY=0 rows), so keep them in ``scanned`` with quantity=None.
     results: list[StoreStock] = []
+    scanned: list[StoreStock] = []
     for biz_no, info in stores.items():
-        if biz_no not in quantities:
-            continue  # store does not carry this SKU
-        quantity = quantities[biz_no]
-        results.append(
-            StoreStock(
-                store_code=biz_no,
-                store_name=info["name"],
-                address=info["address"],
-                quantity=quantity,
-                in_stock=quantity > 0,
-            )
+        quantity = quantities.get(biz_no)
+        store = StoreStock(
+            store_code=biz_no,
+            store_name=info["name"],
+            address=info["address"],
+            quantity=quantity,
+            in_stock=quantity is not None and quantity > 0,
         )
+        scanned.append(store)
+        if quantity is not None:
+            results.append(store)
     results.sort(key=lambda store: store.quantity or 0, reverse=True)
+    scanned.sort(key=scanned_sort_key)
 
     logger.info(
-        "Emart24 stock lookup for pluCd %s near %r: %d store(s), %d in stock",
+        "Emart24 stock lookup for pluCd %s near %r: %d/%d store(s) with data, %d in stock",
         code,
         keyword,
         len(results),
+        len(scanned),
         sum(1 for s in results if s.in_stock),
     )
-    return _result(ok=True, stores=results)
+    return _result(ok=True, stores=results, scanned=scanned)
 
 
 class Emart24Adapter:

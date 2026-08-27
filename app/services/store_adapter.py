@@ -50,6 +50,12 @@ class StockLookup:
     ``ok`` is False when the lookup failed (see ``error``); ``stores`` is then
     empty. ``context`` is a short human-readable description of the query scope
     (coordinates+radius for GS25, store keyword for 7-Eleven).
+
+    ``stores`` holds only the stores the brand returned stock data for.
+    ``scanned_stores`` is every store the query actually covered, so the UI can
+    show what "이 지역" meant; stores with no stock data carry ``quantity=None``
+    (verified against both APIs: they do return rows with quantity 0, so a
+    missing store means the SKU isn't stocked there, not that it sold out).
     """
 
     checked_at: datetime
@@ -59,14 +65,32 @@ class StockLookup:
     stores: list[StoreStock] = field(default_factory=list)
     error: str | None = None
     context: str = ""
+    scanned_stores: list[StoreStock] = field(default_factory=list)
 
     @property
     def in_stock_count(self) -> int:
         return sum(1 for store in self.stores if store.in_stock)
 
     @property
+    def scanned_count(self) -> int:
+        """Number of stores the query covered (falls back to ``stores``)."""
+        return len(self.scanned_stores) or len(self.stores)
+
+    @property
+    def no_data_count(self) -> int:
+        """Scanned stores the brand returned no stock data for."""
+        if not self.scanned_stores:
+            return 0
+        return max(len(self.scanned_stores) - len(self.stores), 0)
+
+    @property
     def total_quantity(self) -> int:
         return sum(store.quantity or 0 for store in self.stores)
+
+
+def scanned_sort_key(store: StoreStock) -> tuple[bool, int]:
+    """Sort scanned stores: those with stock data first, largest quantity first."""
+    return (store.quantity is None, -(store.quantity or 0))
 
 
 @dataclass(frozen=True)

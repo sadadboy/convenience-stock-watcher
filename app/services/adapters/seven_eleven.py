@@ -28,6 +28,7 @@ from app.services.store_adapter import (
     StoreCandidate,
     StoreStock,
     haversine_m,
+    scanned_sort_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,7 +269,13 @@ async def check_seveneleven_stock(
         f"'{keyword}' 반경 {radius_meters}m" if use_radius else f"매장 검색 '{keyword}'"
     )
 
-    def _result(*, ok: bool, stores: list[StoreStock] | None = None, error: str | None = None):
+    def _result(
+        *,
+        ok: bool,
+        stores: list[StoreStock] | None = None,
+        error: str | None = None,
+        scanned: list[StoreStock] | None = None,
+    ):
         return StockLookup(
             checked_at=now,
             brand=StoreBrand.SEVEN_ELEVEN,
@@ -277,6 +284,7 @@ async def check_seveneleven_stock(
             stores=stores or [],
             error=error,
             context=context,
+            scanned_stores=scanned or [],
         )
 
     if not code:
@@ -311,30 +319,34 @@ async def check_seveneleven_stock(
         logger.warning("7-Eleven stock lookup returned invalid JSON for itemCd %s: %s", code, exc)
         return _result(ok=False, error="7-Eleven 재고 응답을 해석하지 못했습니다.")
 
+    # Stores missing from the real-stock response don't carry the SKU (the API
+    # does return stock=0 rows), so keep them in ``scanned`` with quantity=None.
     results: list[StoreStock] = []
+    scanned: list[StoreStock] = []
     for store_code, info in stores.items():
-        if store_code not in quantities:
-            continue  # store does not carry this SKU
-        quantity = quantities[store_code]
-        results.append(
-            StoreStock(
-                store_code=store_code,
-                store_name=info["name"],
-                address=info["address"],
-                quantity=quantity,
-                in_stock=quantity > 0,
-            )
+        quantity = quantities.get(store_code)
+        store = StoreStock(
+            store_code=store_code,
+            store_name=info["name"],
+            address=info["address"],
+            quantity=quantity,
+            in_stock=quantity is not None and quantity > 0,
         )
+        scanned.append(store)
+        if quantity is not None:
+            results.append(store)
     results.sort(key=lambda store: store.quantity or 0, reverse=True)
+    scanned.sort(key=scanned_sort_key)
 
     logger.info(
-        "7-Eleven stock lookup for itemCd %s near %r: %d store(s), %d in stock",
+        "7-Eleven stock lookup for itemCd %s near %r: %d/%d store(s) with data, %d in stock",
         code,
         keyword,
         len(results),
+        len(scanned),
         sum(1 for s in results if s.in_stock),
     )
-    return _result(ok=True, stores=results)
+    return _result(ok=True, stores=results, scanned=scanned)
 
 
 class SevenElevenAdapter:

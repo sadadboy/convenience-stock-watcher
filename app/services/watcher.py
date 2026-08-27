@@ -162,7 +162,7 @@ def _apply_result(
         watch.next_check_at = decision.next_check_at
         watch.paused_until = None
 
-        message = f"재고 없음 (조회 {len(result.stores)}개 매장, {result.context})"
+        message = f"재고 없음 (조회 {result.scanned_count}개 매장, {result.context})"
         event = _add_event(db, watch, kind="check", status="out_of_stock", quantity=0, message=message)
 
     db.commit()

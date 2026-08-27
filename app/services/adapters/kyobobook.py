@@ -182,6 +182,8 @@ async def check_kyobobook_stock(
             stores=stores or [],
             error=error,
             context=context,
+            # Every matching store comes back in one call, so scanned == stores.
+            scanned_stores=stores or [],
         )
 
     if not code:

@@ -147,6 +147,33 @@
         background: #fef3c7;
       }
 
+      .nodata {
+        color: #4b5563;
+        background: #e5e7eb;
+      }
+
+      .scanned-stores {
+        margin: 8px 0;
+      }
+
+      .scanned-stores summary {
+        cursor: pointer;
+        font-size: 13px;
+        color: #374151;
+      }
+
+      .scanned-stores ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+
+      .scanned-stores li {
+        margin-bottom: 6px;
+        font-size: 13px;
+      }
+
       .inline-form {
         display: inline;
       }
@@ -389,10 +416,34 @@
               <span class="badge empty">조회 실패</span>
               {{ stock.error }}
             </div>
-          {% elif stock.stores %}
+          {% else %}
             <div>
-              조회 {{ stock.stores|length }}개 매장 · 재고 있는 매장 {{ stock.in_stock_count }}개
+              조회 대상 {{ stock.scanned_count }}개 매장 · 재고정보 있는 매장 {{ stock.stores|length }}개 ·
+              재고 있는 매장 {{ stock.in_stock_count }}개
             </div>
+            {% if stock.scanned_stores %}
+              <details class="scanned-stores">
+                <summary>
+                  조회 대상 매장 {{ stock.scanned_count }}곳 보기{% if stock.no_data_count %} · 재고정보 없음 {{ stock.no_data_count }}곳{% endif %}
+                </summary>
+                <ul>
+                  {% for store in stock.scanned_stores %}
+                    <li>
+                      <strong>{{ store.store_name }}</strong>
+                      {% if store.quantity is none %}
+                        <span class="badge nodata">재고정보 없음</span>
+                      {% elif store.in_stock %}
+                        <span class="badge stock">{{ store.quantity }}개</span>
+                      {% else %}
+                        <span class="badge empty">없음</span>
+                      {% endif %}
+                      <div class="muted">{{ store.address }}</div>
+                    </li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% endif %}
+            {% if stock.stores %}
             <table>
               <thead>
                 <tr>
@@ -417,8 +468,12 @@
                 {% endfor %}
               </tbody>
             </table>
-          {% else %}
-            <div><span class="badge empty">조회 범위에 재고 매장이 없습니다.</span></div>
+            {% else %}
+              <div>
+                <span class="badge empty">재고정보가 있는 매장이 없습니다.</span>
+                <div class="muted">조회 대상 매장이 이 상품을 취급하지 않을 수 있습니다 (재고 0과는 다름).</div>
+              </div>
+            {% endif %}
           {% endif %}
         </section>
       {% endif %}
@@ -448,6 +503,11 @@
                         <span class="badge stock">재고 {{ result.in_stock_count }}곳</span>
                       {% else %}
                         <span class="badge empty">없음</span>
+                      {% endif %}
+                      {% if result and result.ok %}
+                        <div class="muted">
+                          조회 대상 {{ result.scanned_count }}곳{% if result.no_data_count %} · 재고정보 없음 {{ result.no_data_count }}곳{% endif %}
+                        </div>
                       {% endif %}
                     </td>
                     <td class="muted">

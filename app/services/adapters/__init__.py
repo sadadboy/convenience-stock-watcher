@@ -13,11 +13,6 @@ from app.services.adapters.emart24 import (
     search_emart24_products,
 )
 from app.services.adapters.gs25 import GS25Adapter, check_gs25_stock, search_gs25_products
-from app.services.adapters.kyobobook import (
-    KyoboBookAdapter,
-    check_kyobobook_stock,
-    search_kyobobook_products,
-)
 from app.services.adapters.seven_eleven import (
     SevenElevenAdapter,
     check_seveneleven_stock,
@@ -30,7 +25,6 @@ _SEARCH_ADAPTERS = {
     StoreBrand.GS25: GS25Adapter(),
     StoreBrand.SEVEN_ELEVEN: SevenElevenAdapter(),
     StoreBrand.EMART24: Emart24Adapter(),
-    StoreBrand.KYOBOBOOK: KyoboBookAdapter(),
 }
 
 # Paged search functions per brand.
@@ -38,7 +32,6 @@ _SEARCH_PAGE_FUNCS = {
     StoreBrand.GS25: search_gs25_products,
     StoreBrand.SEVEN_ELEVEN: search_seveneleven_products,
     StoreBrand.EMART24: search_emart24_products,
-    StoreBrand.KYOBOBOOK: search_kyobobook_products,
 }
 
 # Ordered list of brands that support candidate search (for UI selectors).
@@ -115,7 +108,4 @@ async def check_stock(
                 radius_meters=radius_meters,
             )
         return await check_gs25_stock(product_code)
-    if resolved is StoreBrand.KYOBOBOOK:
-        # One call covers every store nationwide; the keyword only narrows it.
-        return await check_kyobobook_stock(product_code, store_keyword=store_keyword)
     return None

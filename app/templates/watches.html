@@ -42,6 +42,7 @@
       .group details { margin-top: 10px; }
       .group summary { cursor: pointer; }
       .group-settings { margin-top: 8px; }
+      .subgroup { border-top: 1px solid #e5e7eb; margin-top: 12px; padding-top: 12px; padding-left: 12px; }
       .settings-form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
       .settings-form label { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; gap: 4px; }
       .settings-form input { width: 120px; }
@@ -68,6 +69,14 @@
         <div class="warn">먼저 디스코드 웹훅 URL을 저장하세요.</div>
       {% endif %}
 
+      {% if added is not none %}
+        {% if added > 0 %}
+          <div class="ok-banner">🔔 감시 {{ added }}개를 추가했습니다. 아래 목록에서 확인하세요.</div>
+        {% else %}
+          <div class="warn">추가된 감시가 없습니다. 해당 상품코드는 이미 같은 위치로 감시 중입니다.</div>
+        {% endif %}
+      {% endif %}
+
       <section class="panel">
         <h2>🔔 디스코드 알림 설정</h2>
         {% if discord_configured %}
@@ -90,120 +99,208 @@
 
       <section class="panel">
         <h2>감시 추가</h2>
-        {% if sources %}
-          <form method="post" action="/watches">
-            <label for="product_source_id">감시할 상품코드</label>
-            <select id="product_source_id" name="product_source_id" required>
-              {% for source in sources %}
-                <option value="{{ source.id }}">
-                  [{{ source.brand }}] {{ source.product.display_name }} · {{ source.external_product_name }} ({{ source.external_product_code }})
-                </option>
+        {% if products %}
+          <p class="muted">상품을 고르면 저장된 상품코드 전부가 한 번에 감시 목록에 올라갑니다. 기존 감시 목록을 고르면 그 지역 목록에 그대로 들어갑니다.</p>
+          <form method="post" action="/watches/product">
+            <label for="product_id">감시할 상품</label>
+            <select id="product_id" name="product_id" required>
+              {% for p in products %}
+                <option value="{{ p.id }}">{{ p.display_name }} · 상품코드 {{ p.sources|selectattr('enabled')|list|length }}개</option>
               {% endfor %}
             </select>
 
+            <label for="location_key">어디에 추가</label>
+            <select id="location_key" name="location_key" onchange="toggleNewLocation()">
+              {% for loc in locations %}
+                <option value="{{ loc.key }}" data-interval="{{ loc.interval }}">
+                  📍 {{ loc.location_query or '전국 (브랜드 전 매장)' }}{% if loc.has_coords and loc.radius_meters %} · 반경 {{ (loc.radius_meters / 1000)|round(1) }}km{% endif %} · 감시 {{ loc.total }}개
+                </option>
+              {% endfor %}
+              <option value="{{ location_key_new }}" data-interval="{{ default_interval }}">＋ 새 위치 직접 입력…</option>
+            </select>
+
             <div class="grid">
-              <div>
-                <label for="location_query">위치</label>
-                <input id="location_query" name="location_query" placeholder="매장 키워드 예: 강남 / GS25는 위도,경도,반경m" required>
+              <div id="new-location-field" hidden>
+                <label for="product_location">새 위치</label>
+                <input id="product_location" name="location_query" value="{{ saved_location.keyword }}" placeholder="예: 상도동, 동작구, 강남역">
               </div>
               <div>
-                <label>참고 (브랜드별 위치 형식)</label>
-                <div class="muted">
-                  세븐일레븐·이마트24: 매장 키워드(강남, 동작구청)<br>
-                  GS25: 위도,경도,반경m (37.5665,126.978,1000)
-                </div>
+                <label>참고</label>
+                {% if saved_location.mode == 'coords' and saved_location.latitude is not none %}
+                  <div class="muted">
+                    새 위치를 비워두면 저장된 지도 위치("{{ saved_location.keyword }}" 반경 {{ (saved_location.radius_meters / 1000)|round(1) }}km)를 씁니다.
+                    지도로 고르려면 <a href="/products">상품 화면</a>에서 위치를 지정하세요.
+                  </div>
+                {% else %}
+                  <div class="muted">
+                    입력한 단어가 매장명·주소에 포함된 매장을 찾습니다 (동·구·역 이름이 잘 잡혀요).
+                  </div>
+                {% endif %}
               </div>
               <div>
-                <label for="check_interval_seconds">조회 간격(초)</label>
-                <input id="check_interval_seconds" name="check_interval_seconds" type="number" min="30" value="{{ default_interval }}" required>
+                <label for="product_interval">조회 간격(초)</label>
+                <input id="product_interval" name="check_interval_seconds" type="number" min="30" value="{{ default_interval }}" required>
               </div>
             </div>
 
-            <button class="submit" type="submit">감시 시작</button>
+            <button class="submit" type="submit">🔔 이 위치에 상품 전체 감시 추가</button>
           </form>
+          <script>
+            // "＋ 새 위치" only needs the text field; existing locations bring their
+            // own keyword/coords, and their interval becomes the default.
+            function toggleNewLocation() {
+              const select = document.getElementById('location_key');
+              const option = select.options[select.selectedIndex];
+              document.getElementById('new-location-field').hidden = select.value !== '{{ location_key_new }}';
+              if (option.dataset.interval) document.getElementById('product_interval').value = option.dataset.interval;
+            }
+            toggleNewLocation();
+          </script>
         {% else %}
           <p class="muted">감시하려면 먼저 <a href="/products">상품</a>에서 편의점 상품코드를 저장하세요.</p>
+        {% endif %}
+
+        {% if sources %}
+          <details style="margin-top:14px;">
+            <summary class="muted">상품코드 하나만 추가하기</summary>
+            <form method="post" action="/watches">
+              <label for="product_source_id">감시할 상품코드</label>
+              <select id="product_source_id" name="product_source_id" required>
+                {% for source in sources %}
+                  <option value="{{ source.id }}">
+                    [{{ source.brand }}] {{ source.product.display_name }} · {{ source.external_product_name }} ({{ source.external_product_code }})
+                  </option>
+                {% endfor %}
+              </select>
+
+              <div class="grid">
+                <div>
+                  <label for="location_query">위치</label>
+                  <input id="location_query" name="location_query" placeholder="매장 키워드 예: 강남 / GS25는 위도,경도,반경m" required>
+                </div>
+                <div>
+                  <label>참고 (브랜드별 위치 형식)</label>
+                  <div class="muted">
+                    {% for brand, hint in location_modes.items() %}{{ brand }}: {{ hint }}<br>{% endfor %}
+                  </div>
+                </div>
+                <div>
+                  <label for="check_interval_seconds">조회 간격(초)</label>
+                  <input id="check_interval_seconds" name="check_interval_seconds" type="number" min="30" value="{{ default_interval }}" required>
+                </div>
+              </div>
+
+              <button class="submit" type="submit">감시 시작</button>
+            </form>
+          </details>
         {% endif %}
       </section>
 
       <section class="panel">
-        <h2>감시 목록 (상품별)</h2>
-        {% if groups %}
-          {% for g in groups %}
+        <h2>감시 목록 (지역별)</h2>
+        {% if locations %}
+          {% for loc in locations %}
+            {% set lid = 'loc-' ~ loop.index %}
             <div class="group">
               <div class="group-head">
                 <div>
-                  <strong>{{ g.product.display_name }}</strong>
-                  <span class="muted">· 상품코드 {{ g.total }}개
-                    {% if g.in_stock %}· <span class="badge stock">재고있음 {{ g.in_stock }}</span>{% endif %}
-                    {% if g.failed %}· <span class="badge failed">실패 {{ g.failed }}</span>{% endif %}
-                    {% if g.paused %}· <span class="badge paused">중지 {{ g.paused }}</span>{% endif %}
-                  </span>
-                  <div class="muted">위치: {{ g.location_query }}{% if g.has_coords and g.radius_meters %} · 반경 {{ (g.radius_meters / 1000)|round(1) }}km{% endif %}</div>
+                  <strong>📍 {{ loc.location_query or '전국 (브랜드 전 매장)' }}</strong>
+                  {% if loc.has_coords and loc.radius_meters %}<span class="muted">· 반경 {{ (loc.radius_meters / 1000)|round(1) }}km</span>{% endif %}
+                  <div class="muted">상품 {{ loc.products|length }}개 · 감시 {{ loc.total }}개
+                    {% if loc.in_stock %}· <span class="badge stock">재고있음 {{ loc.in_stock }}</span>{% endif %}
+                    {% if loc.failed %}· <span class="badge failed">실패 {{ loc.failed }}</span>{% endif %}
+                    {% if loc.paused %}· <span class="badge paused">중지 {{ loc.paused }}</span>{% endif %}
+                  </div>
                 </div>
                 <div class="actions">
-                  <button type="button" onclick="checkGroup(this, '{{ g.watch_ids|replace(',', '_') }}')"
-                          data-watch-ids="{{ g.watch_ids }}">지금 전체 확인</button>
+                  <button type="button" onclick="checkGroup(this, '{{ lid }}')" data-watch-ids="{{ loc.watch_ids }}">지금 전체 확인</button>
                   <form class="inline-form" method="post" action="/watches/group/resume">
-                    <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="secondary" type="submit">전체 재개</button></form>
+                    <input type="hidden" name="watch_ids" value="{{ loc.watch_ids }}"><button class="secondary" type="submit">전체 재개</button></form>
                   <form class="inline-form" method="post" action="/watches/group/pause">
-                    <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="secondary" type="submit">전체 중지</button></form>
+                    <input type="hidden" name="watch_ids" value="{{ loc.watch_ids }}"><button class="secondary" type="submit">전체 중지</button></form>
                   <form class="inline-form" method="post" action="/watches/group/delete"
-                        onsubmit="return confirm('이 그룹 감시 {{ g.total }}개를 모두 삭제할까요?');">
-                    <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="danger" type="submit">전체 삭제</button></form>
+                        onsubmit="return confirm('{{ loc.location_query or '전국' }} 지역의 감시 {{ loc.total }}개를 모두 삭제할까요?');">
+                    <input type="hidden" name="watch_ids" value="{{ loc.watch_ids }}"><button class="danger" type="submit">전체 삭제</button></form>
                 </div>
               </div>
-              <div class="group-progress muted" id="prog-{{ g.watch_ids|replace(',', '_') }}"></div>
-              <details class="group-settings">
-                <summary class="muted">⚙️ 설정 (조회 간격 · 최대 알림)</summary>
-                <form method="post" action="/watches/group/settings" class="settings-form">
-                  <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}">
-                  <label>조회 간격(초)
-                    <input name="check_interval_seconds" type="number" min="30" value="{{ g.interval }}">
-                  </label>
-                  <label>최대 알림 횟수
-                    <input name="max_alert_count" type="number" min="1" value="{{ g.max_alert_count }}">
-                  </label>
-                  <button type="submit">저장</button>
-                </form>
-                <p class="muted" style="margin:6px 0 0;">간격을 바꾸면 이 그룹의 조회 시각이 다시 고르게 분산됩니다. 재고 발견 시 최대 {{ g.max_alert_count }}회 알림 후 잠시 멈춥니다.</p>
-              </details>
-              <details>
-                <summary class="muted">개별 상품코드 {{ g.total }}개 펼치기</summary>
-                <table>
-                  <thead><tr><th>상품코드</th><th>상태</th><th>최근 재고</th><th>동작</th></tr></thead>
-                  <tbody>
-                    {% for w in g.watches %}
-                      <tr id="watch-row-{{ w.id }}">
-                        <td>[{{ w.source.brand }}] {{ w.source.external_product_name }}<div class="muted">{{ w.source.external_product_code }} · 간격 {{ w.check_interval_seconds }}s</div></td>
-                        <td class="w-status"><span class="badge {{ w.status }}">{{ w.status }}</span></td>
-                        <td class="w-stock">
-                          {% if w.last_stock_status == 'in_stock' %}<span class="badge stock">재고 {{ w.last_stock_quantity }}개</span><div class="muted">{{ w.last_in_stock_summary }}</div>
-                          {% elif w.last_stock_status == 'out_of_stock' %}<span class="badge empty">없음</span>
-                          {% elif w.last_error %}<span class="badge failed">실패</span>
-                          {% else %}<span class="muted">미조회</span>{% endif %}
-                          {% if w.last_checked_at %}<div class="muted">{{ w.last_checked_at | kst('%m-%d %H:%M') }} 조회</div>{% endif %}
-                        </td>
-                        <td>
-                          <div class="actions">
-                            <form class="inline-form" method="post" action="/watches/{{ w.id }}/check"><button type="submit">확인</button></form>
-                            {% if w.status == 'disabled' %}
-                              <form class="inline-form" method="post" action="/watches/{{ w.id }}/resume"><button type="submit">재개</button></form>
-                            {% else %}
-                              <form class="inline-form" method="post" action="/watches/{{ w.id }}/pause"><button class="secondary" type="submit">중지</button></form>
-                            {% endif %}
-                            <form class="inline-form" method="post" action="/watches/{{ w.id }}/delete"><button class="secondary" type="submit">삭제</button></form>
-                          </div>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </details>
+              <div class="group-progress muted" id="prog-{{ lid }}"></div>
+
+              {% for g in loc.products %}
+                {% set pid = lid ~ '-p' ~ loop.index %}
+                <div class="subgroup">
+                  <div class="group-head">
+                    <div>
+                      <strong>{{ g.product.display_name }}</strong>
+                      <span class="muted">· 상품코드 {{ g.total }}개
+                        {% if g.in_stock %}· <span class="badge stock">재고있음 {{ g.in_stock }}</span>{% endif %}
+                        {% if g.failed %}· <span class="badge failed">실패 {{ g.failed }}</span>{% endif %}
+                        {% if g.paused %}· <span class="badge paused">중지 {{ g.paused }}</span>{% endif %}
+                      </span>
+                    </div>
+                    <div class="actions">
+                      <button type="button" onclick="checkGroup(this, '{{ pid }}')" data-watch-ids="{{ g.watch_ids }}">지금 확인</button>
+                      <form class="inline-form" method="post" action="/watches/group/resume">
+                        <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="secondary" type="submit">재개</button></form>
+                      <form class="inline-form" method="post" action="/watches/group/pause">
+                        <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="secondary" type="submit">중지</button></form>
+                      <form class="inline-form" method="post" action="/watches/group/delete"
+                            onsubmit="return confirm('{{ g.product.display_name }} 감시 {{ g.total }}개를 삭제할까요?');">
+                        <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}"><button class="danger" type="submit">삭제</button></form>
+                    </div>
+                  </div>
+                  <div class="group-progress muted" id="prog-{{ pid }}"></div>
+                  <details class="group-settings">
+                    <summary class="muted">⚙️ 설정 (조회 간격 · 최대 알림)</summary>
+                    <form method="post" action="/watches/group/settings" class="settings-form">
+                      <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}">
+                      <label>조회 간격(초)
+                        <input name="check_interval_seconds" type="number" min="30" value="{{ g.interval }}">
+                      </label>
+                      <label>최대 알림 횟수
+                        <input name="max_alert_count" type="number" min="1" value="{{ g.max_alert_count }}">
+                      </label>
+                      <button type="submit">저장</button>
+                    </form>
+                    <p class="muted" style="margin:6px 0 0;">간격을 바꾸면 이 그룹의 조회 시각이 다시 고르게 분산됩니다. 재고 발견 시 최대 {{ g.max_alert_count }}회 알림 후 잠시 멈춥니다.</p>
+                  </details>
+                  <details>
+                    <summary class="muted">개별 상품코드 {{ g.total }}개 펼치기</summary>
+                    <table>
+                      <thead><tr><th>상품코드</th><th>상태</th><th>최근 재고</th><th>동작</th></tr></thead>
+                      <tbody>
+                        {% for w in g.watches %}
+                          <tr id="watch-row-{{ w.id }}">
+                            <td>[{{ w.source.brand }}] {{ w.source.external_product_name }}<div class="muted">{{ w.source.external_product_code }} · 간격 {{ w.check_interval_seconds }}s</div></td>
+                            <td class="w-status"><span class="badge {{ w.status }}">{{ w.status }}</span></td>
+                            <td class="w-stock">
+                              {% if w.last_stock_status == 'in_stock' %}<span class="badge stock">재고 {{ w.last_stock_quantity }}개</span><div class="muted">{{ w.last_in_stock_summary }}</div>
+                              {% elif w.last_stock_status == 'out_of_stock' %}<span class="badge empty">없음</span>
+                              {% elif w.last_error %}<span class="badge failed">실패</span>
+                              {% else %}<span class="muted">미조회</span>{% endif %}
+                              {% if w.last_checked_at %}<div class="muted">{{ w.last_checked_at | kst('%m-%d %H:%M') }} 조회</div>{% endif %}
+                            </td>
+                            <td>
+                              <div class="actions">
+                                <form class="inline-form" method="post" action="/watches/{{ w.id }}/check"><button type="submit">확인</button></form>
+                                {% if w.status == 'disabled' %}
+                                  <form class="inline-form" method="post" action="/watches/{{ w.id }}/resume"><button type="submit">재개</button></form>
+                                {% else %}
+                                  <form class="inline-form" method="post" action="/watches/{{ w.id }}/pause"><button class="secondary" type="submit">중지</button></form>
+                                {% endif %}
+                                <form class="inline-form" method="post" action="/watches/{{ w.id }}/delete"><button class="secondary" type="submit">삭제</button></form>
+                              </div>
+                            </td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </details>
+                </div>
+              {% endfor %}
             </div>
           {% endfor %}
         {% else %}
-          <p class="muted">아직 감시가 없습니다. 상품 화면에서 "🔔 이 상품 전체 감시"로 한 번에 등록하거나, 위에서 개별 추가하세요.</p>
+          <p class="muted">아직 감시가 없습니다. 위에서 상품을 골라 추가하거나, 상품 화면에서 "🔔 이 상품 전체 감시"로 등록하세요.</p>
         {% endif %}
       </section>
 

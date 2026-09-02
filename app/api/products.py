@@ -19,8 +19,8 @@ from app.repositories.products import (
 )
 from app.repositories.location import (
     get_search_location,
+    resolve_location,
     set_search_location_coords,
-    set_search_location_keyword,
 )
 from app.schemas.product import ProductCreate, ProductSourceCreate
 from app.core.config import settings
@@ -33,7 +33,7 @@ from app.services.adapters import (
 from app.repositories.watches import create_watches_for_product
 from app.services.geocoding import reverse_geocode_keyword
 from app.services.mock_inventory import check_mock_inventory
-from app.services.store_adapter import NATIONWIDE_BRANDS, StoreBrand
+from app.services.store_adapter import StoreBrand
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -43,10 +43,6 @@ STOCK_BRAND_MODES = {
     StoreBrand.GS25.value: "coords",
     StoreBrand.SEVEN_ELEVEN.value: "store_keyword",
     StoreBrand.EMART24.value: "store_keyword",
-    # Kyobo has ~37 named branches nationwide and one call returns them all, so a
-    # 구-level keyword (what the shared location picker yields) means nothing to
-    # it. Default to nationwide; a watch can still name a branch explicitly.
-    StoreBrand.KYOBOBOOK.value: "nationwide",
 }
 
 
@@ -91,29 +87,6 @@ def _render_product_detail(
             "gs25_default_radius_meters": settings.gs25_default_radius_meters,
         },
     )
-
-
-def _resolve_location(db: Session, submitted_keyword: str | None) -> tuple[str, float | None, float | None, int | None]:
-    """Resolve the effective search location, persisting the keyword as last-used.
-
-    Returns (keyword, latitude, longitude, radius_meters). Coordinates are only
-    returned when the saved location is in coords mode and the submitted keyword
-    still matches it (i.e. the user hasn't typed a different area).
-    """
-    location = get_search_location(db)
-    keyword = (submitted_keyword or "").strip()
-
-    if not keyword:
-        if location.mode == "coords":
-            return location.keyword, location.latitude, location.longitude, location.radius_meters
-        return location.keyword, None, None, None
-
-    if location.mode == "coords" and keyword == location.keyword:
-        return keyword, location.latitude, location.longitude, location.radius_meters
-
-    if keyword != location.keyword or location.mode != "keyword":
-        set_search_location_keyword(db, keyword)
-    return keyword, None, None, None
 
 
 async def _lookup_source_stock(source, keyword, latitude, longitude, radius_meters):
@@ -182,7 +155,7 @@ async def stock_all_action(
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    keyword, latitude, longitude, radius = _resolve_location(db, store_keyword)
+    keyword, latitude, longitude, radius = resolve_location(db, store_keyword)
     targets = [
         source
         for source in product.sources
@@ -219,7 +192,7 @@ async def watch_all_action(
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    keyword, latitude, longitude, radius = _resolve_location(db, "")
+    keyword, latitude, longitude, radius = resolve_location(db, "")
     interval = check_interval_seconds or settings.watcher_default_interval_seconds
     create_watches_for_product(
         db,
@@ -401,11 +374,7 @@ async def source_stock_action(
         raise HTTPException(status_code=404, detail="Product not found")
 
     source = _find_source(product, source_id)
-    keyword, latitude, longitude, radius = _resolve_location(db, store_keyword)
-    if source.brand in NATIONWIDE_BRANDS and not store_keyword.strip():
-        # Don't let the shared 구-level location leak into a nationwide brand;
-        # an explicitly typed keyword still narrows it.
-        keyword, latitude, longitude, radius = "", None, None, None
+    keyword, latitude, longitude, radius = resolve_location(db, store_keyword)
     stock = await _lookup_source_stock(source, keyword, latitude, longitude, radius)
     return _render_product_detail(request, product, db, stock=stock, stock_source_id=source_id)
 

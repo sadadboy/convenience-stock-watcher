@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.domain.alerts import WatchStatus
 from app.models.product import Product, ProductSource
 from app.models.restock import StockWatch, StockWatchEvent
-from app.services.store_adapter import NATIONWIDE_BRANDS
 
 
 def list_watches(db: Session) -> list[StockWatch]:
@@ -35,6 +34,54 @@ def list_watchable_sources(db: Session) -> list[ProductSource]:
             .options(joinedload(ProductSource.product))
             .where(ProductSource.enabled.is_(True))
             .order_by(ProductSource.created_at.desc())
+        )
+    )
+
+
+LOCATION_KEY_NEW = "__new__"
+
+
+def encode_location_key(
+    location_query: str,
+    latitude: float | None,
+    longitude: float | None,
+    radius_meters: int | None,
+) -> str:
+    """Pack a location into one form value ("lat|lon|radius|keyword").
+
+    The keyword goes last so it can contain "|" without breaking the split.
+    """
+    parts = ["" if v is None else str(v) for v in (latitude, longitude, radius_meters)]
+    return "|".join(parts + [location_query])
+
+
+def decode_location_key(key: str) -> tuple[str, float | None, float | None, int | None] | None:
+    """Unpack encode_location_key; None if the value isn't a location key."""
+    parts = key.split("|", 3)
+    if len(parts) != 4:
+        return None
+    lat, lon, radius, keyword = parts
+    try:
+        return (
+            keyword,
+            float(lat) if lat else None,
+            float(lon) if lon else None,
+            int(radius) if radius else None,
+        )
+    except ValueError:
+        return None
+
+
+def list_watchable_products(db: Session) -> list[Product]:
+    """Products with at least one enabled source, for the product-level add form."""
+    return list(
+        db.scalars(
+            select(Product)
+            .options(selectinload(Product.sources))
+            .join(ProductSource, ProductSource.product_id == Product.id)
+            .where(ProductSource.enabled.is_(True))
+            .distinct()
+            .order_by(Product.display_name)
         )
     )
 
@@ -110,17 +157,14 @@ def create_watches_for_product(
     # Spread first checks evenly across the interval so they don't burst together.
     step = check_interval_seconds / len(to_create) if to_create else 0
     for i, source in enumerate(to_create):
-        # Nationwide brands (Kyobo) have named branches, not a 구/반경 scope, so
-        # the shared location would only ever fail to match. Watch them nationwide.
-        nationwide = source.brand in NATIONWIDE_BRANDS
         db.add(
             StockWatch(
                 product_source_id=source.id,
-                location_query="" if nationwide else keyword,
+                location_query=keyword,
                 check_interval_seconds=check_interval_seconds,
-                latitude=None if nationwide else latitude,
-                longitude=None if nationwide else longitude,
-                radius_meters=None if nationwide else radius_meters,
+                latitude=latitude,
+                longitude=longitude,
+                radius_meters=radius_meters,
                 status=WatchStatus.ACTIVE.value,
                 next_check_at=now + timedelta(seconds=step * i),
             )
@@ -140,42 +184,59 @@ def watches_for_product(db: Session, product_id: int) -> list[StockWatch]:
     )
 
 
-def list_watch_groups(db: Session) -> list[dict]:
-    """Group watches by (product + location) for the grouped /watches UI.
+def _tally(watches: list[StockWatch]) -> dict:
+    """Counters + bulk-action payload shared by the location and product levels."""
+    return {
+        "total": len(watches),
+        "in_stock": sum(1 for w in watches if w.last_stock_status == "in_stock"),
+        "active": sum(1 for w in watches if w.status == "active"),
+        "failed": sum(1 for w in watches if w.status == "failed"),
+        "paused": sum(1 for w in watches if w.status == "paused"),
+        "watch_ids": ",".join(str(w.id) for w in watches),
+        "interval": watches[0].check_interval_seconds,
+        "max_alert_count": watches[0].max_alert_count,
+    }
 
-    The same product watched at different locations forms separate groups.
+
+def list_watch_locations(db: Session) -> list[dict]:
+    """Group watches by location, then by product, for the /watches UI.
+
+    Location comes first because that is how watches are actually managed: one
+    area is checked as a unit, and several products share it.
     """
-    watches = list_watches(db)
-    groups: dict[tuple, dict] = {}
-    for watch in watches:
-        product = watch.source.product
-        key = (product.id, watch.location_query, watch.latitude, watch.longitude, watch.radius_meters)
-        group = groups.get(key)
-        if group is None:
-            group = {
-                "product": product,
-                "watches": [],
+    by_location: dict[tuple, dict] = {}
+    for watch in list_watches(db):
+        loc_key = (watch.location_query, watch.latitude, watch.longitude, watch.radius_meters)
+        location = by_location.get(loc_key)
+        if location is None:
+            location = {
+                "key": encode_location_key(*loc_key),
                 "location_query": watch.location_query,
+                "latitude": watch.latitude,
+                "longitude": watch.longitude,
                 "radius_meters": watch.radius_meters,
                 "has_coords": watch.latitude is not None,
+                "watches": [],
+                "products": {},
             }
-            groups[key] = group
-        group["watches"].append(watch)
+            by_location[loc_key] = location
+        location["watches"].append(watch)
+        product = watch.source.product
+        location["products"].setdefault(product.id, {"product": product, "watches": []})
+        location["products"][product.id]["watches"].append(watch)
 
     result = []
-    for group in groups.values():
-        ws = group["watches"]
-        group["total"] = len(ws)
-        group["in_stock"] = sum(1 for w in ws if w.last_stock_status == "in_stock")
-        group["active"] = sum(1 for w in ws if w.status == "active")
-        group["failed"] = sum(1 for w in ws if w.status == "failed")
-        group["paused"] = sum(1 for w in ws if w.status == "paused")
-        group["watch_ids"] = ",".join(str(w.id) for w in ws)
-        group["interval"] = ws[0].check_interval_seconds
-        group["max_alert_count"] = ws[0].max_alert_count
-        result.append(group)
-    # Stable order: by product name, then location.
-    result.sort(key=lambda g: (g["product"].display_name, g["location_query"]))
+    for location in by_location.values():
+        location.update(_tally(location["watches"]))
+        products = []
+        for entry in location["products"].values():
+            entry.update(_tally(entry["watches"]))
+            products.append(entry)
+        products.sort(key=lambda p: p["product"].display_name)
+        location["products"] = products
+        result.append(location)
+    # Nationwide watches (empty location) last; the rest by area name.
+    result.sort(key=lambda loc: (loc["location_query"] == "", loc["location_query"]))
     return result
 
 

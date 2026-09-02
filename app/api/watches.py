@@ -5,14 +5,19 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.templating import templates
 from app.domain.alerts import WatchStatus
+from app.repositories.location import get_search_location, resolve_location
 from app.repositories.notifications import get_discord_webhook, set_discord_webhook
 from app.repositories.watches import (
+    LOCATION_KEY_NEW,
     create_watch,
+    create_watches_for_product,
+    decode_location_key,
     delete_watch,
     delete_watches,
     get_watch,
+    list_watchable_products,
     list_watchable_sources,
-    list_watch_groups,
+    list_watch_locations,
     recent_events,
     set_watch_status,
     set_watches_status,
@@ -31,7 +36,6 @@ LOCATION_MODES = {
     StoreBrand.SEVEN_ELEVEN.value: "매장 키워드 (예: 강남, 동작구청)",
     StoreBrand.EMART24.value: "매장 키워드 (예: 강남, 동작구청)",
     StoreBrand.GS25.value: "위도,경도,반경m (예: 37.5665,126.978,1000)",
-    StoreBrand.KYOBOBOOK.value: "매장 이름/주소 일부 (비우면 전국 37개 매장)",
 }
 
 
@@ -45,6 +49,7 @@ def _mask_webhook(url: str | None) -> str:
 async def watches_page(
     request: Request,
     test: str | None = None,
+    added: int | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     webhook = get_discord_webhook(db)
@@ -52,8 +57,11 @@ async def watches_page(
         "watches.html",
         {
             "request": request,
-            "groups": list_watch_groups(db),
+            "locations": list_watch_locations(db),
             "sources": list_watchable_sources(db),
+            "products": list_watchable_products(db),
+            "saved_location": get_search_location(db),
+            "location_key_new": LOCATION_KEY_NEW,
             "events": recent_events(db),
             "location_modes": LOCATION_MODES,
             "default_interval": settings.watcher_default_interval_seconds,
@@ -61,6 +69,7 @@ async def watches_page(
             "discord_configured": bool(webhook),
             "discord_masked": _mask_webhook(webhook),
             "test_result": test,
+            "added": added,
         },
     )
 
@@ -104,6 +113,38 @@ async def create_watch_action(
     if watch is None:
         raise HTTPException(status_code=404, detail="Product source not found")
     return RedirectResponse(url="/watches", status_code=303)
+
+
+@router.post("/product")
+async def create_product_watches_action(
+    product_id: int = Form(...),
+    location_key: str = Form(LOCATION_KEY_NEW),
+    location_query: str = Form(""),
+    check_interval_seconds: int = Form(0),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Register a watch for every enabled source of one product, in one go.
+
+    ``location_key`` picks an existing watch location so the new watches land in
+    that list exactly (same keyword/coords/radius); otherwise the typed keyword
+    is resolved the same way the product screen does it.
+    """
+    existing = decode_location_key(location_key) if location_key != LOCATION_KEY_NEW else None
+    if existing is not None:
+        keyword, latitude, longitude, radius = existing
+    else:
+        keyword, latitude, longitude, radius = resolve_location(db, location_query)
+    interval = check_interval_seconds or settings.watcher_default_interval_seconds
+    created = create_watches_for_product(
+        db,
+        product_id=product_id,
+        location_query=keyword,
+        check_interval_seconds=max(interval, 30),
+        latitude=latitude,
+        longitude=longitude,
+        radius_meters=radius,
+    )
+    return RedirectResponse(url=f"/watches?added={created}", status_code=303)
 
 
 @router.post("/{watch_id}/check")

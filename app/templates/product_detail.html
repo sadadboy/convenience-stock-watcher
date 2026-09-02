@@ -631,7 +631,7 @@
                       <div class="actions">
                         {% if stock_brand_modes.get(source.brand) %}
                           <form class="inline-form" method="post" action="/products/{{ product.id }}/sources/{{ source.id }}/stock"
-                                {% if stock_brand_modes.get(source.brand) != 'nationwide' %}onsubmit="this.store_keyword.value = document.getElementById('stock_location').value;"{% endif %}>
+                                onsubmit="this.store_keyword.value = document.getElementById('stock_location').value;">
                             <input type="hidden" name="store_keyword">
                             <button type="submit">재고 조회</button>
                           </form>

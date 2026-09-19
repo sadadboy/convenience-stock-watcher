@@ -36,6 +36,7 @@ LOCATION_MODES = {
     StoreBrand.SEVEN_ELEVEN.value: "매장 키워드 (예: 강남, 동작구청)",
     StoreBrand.EMART24.value: "매장 키워드 (예: 강남, 동작구청)",
     StoreBrand.GS25.value: "위도,경도,반경m (예: 37.5665,126.978,1000)",
+    StoreBrand.CU.value: "지도에서 지정한 위치 (좌표 필요, API 조회 범위 최대 약 1km)",
 }
 
 

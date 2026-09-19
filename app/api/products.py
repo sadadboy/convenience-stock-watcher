@@ -41,6 +41,7 @@ router = APIRouter(prefix="/products", tags=["products"])
 # the query): "coords" uses lat/lon/radius, "store_keyword" uses a store search.
 STOCK_BRAND_MODES = {
     StoreBrand.GS25.value: "coords",
+    StoreBrand.CU.value: "coords",
     StoreBrand.SEVEN_ELEVEN.value: "store_keyword",
     StoreBrand.EMART24.value: "store_keyword",
 }

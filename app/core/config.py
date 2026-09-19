@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # Leave blank to keep stock lookups as a graceful no-op / failure.
     gs25_auth_token: str = ""
 
-    # Shared HTTP timeout for the 7-Eleven / Emart24 adapters (seconds).
+    # Shared HTTP timeout for the 7-Eleven / Emart24 / CU adapters (seconds).
     adapter_request_timeout: float = 10.0
 
     # 7-Eleven product search (public /open/ search endpoint, no auth).
@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     emart24_stock_search_path: str = "/api/stock/v2/stock-search/store"
     emart24_store_limit: int = 30
     emart24_default_store_keyword: str = "강남"
+
+    # CU (포켓CU) product search + coordinate stock lookup (public web API, no
+    # auth; the fixed User-Agent must contain "BGFCU").
+    cu_search_enabled: bool = True
+    cu_stock_enabled: bool = True
+    cu_base_url: str = "https://www.pocketcu.co.kr"
+    cu_search_path: str = "/api/search/rest/stock/main"
+    cu_store_path: str = "/api/store"
+    cu_search_limit: int = 20
+    # /api/store only returns stores within about 1km; larger radii are capped.
+    cu_max_radius_meters: int = 1000
 
     # Restock watcher scheduler.
     watcher_enabled: bool = True

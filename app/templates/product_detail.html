@@ -856,7 +856,7 @@
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19, attribution: '© OpenStreetMap',
           }).addTo(_map);
-          _map.on('click', (e) => setPoint(e.latlng.lat, e.latlng.lng));
+          _map.on('click', (e) => { const p = e.latlng.wrap(); setPoint(p.lat, p.lng); });
           if (SAVED_LOC.lat != null) setPoint(SAVED_LOC.lat, SAVED_LOC.lon);
         }
         // Leaflet needs a size recalc when shown inside a dialog.

@@ -389,6 +389,9 @@ async def set_location_action(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Save a map-picked location: reverse-geocode to a 구/동 keyword + store coords."""
+    # Leaflet reports unwrapped longitudes after panning across the antimeridian
+    # (e.g. 126.93 - 360 = -233.07); fold back into [-180, 180).
+    longitude = (longitude + 180) % 360 - 180
     keyword = await reverse_geocode_keyword(latitude, longitude)
     if not keyword:
         # Geocoding failed; keep the previous keyword so store fetch can still seed.

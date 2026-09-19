@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>등록된 기기 · Convenience Stock Watcher</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1f2937;
+        background: #f6f7f9;
+      }
+
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 20px;
+      }
+
+      nav {
+        margin-bottom: 20px;
+      }
+
+      a {
+        color: #2563eb;
+        text-decoration: none;
+      }
+
+      h1 {
+        margin: 0 0 20px;
+        font-size: 28px;
+      }
+
+      .panel {
+        border: 1px solid #dfe3e8;
+        border-radius: 8px;
+        padding: 16px;
+        background: #ffffff;
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e5e7eb;
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: #4b5563;
+        font-size: 13px;
+      }
+
+      .muted {
+        color: #6b7280;
+        font-size: 13px;
+      }
+
+      .badge {
+        display: inline-flex;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #065f46;
+        background: #d1fae5;
+      }
+
+      .bar {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .danger {
+        color: #7f1d1d;
+        background: #fee2e2;
+      }
+
+      .secondary {
+        color: #1f2937;
+        background: #e5e7eb;
+      }
+
+      input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><a href="/">← Dashboard</a></nav>
+      <h1>등록된 기기</h1>
+      <section class="panel">
+        <p class="muted">여기 있는 기기만 앱에 들어올 수 있습니다. 해제한 기기는 비밀번호로 다시 등록해야 합니다. 자동 재고 감시는 기기와 관계없이 계속 돕니다.</p>
+        <form method="post" action="/devices/revoke"
+              onsubmit="const n = document.querySelectorAll('.device-check:checked').length; if (!n) { alert('선택한 기기가 없습니다.'); return false; } return confirm(`선택한 기기 ${n}대를 해제할까요?`);">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>기기</th>
+                <th>등록</th>
+                <th>마지막 사용</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for device in devices %}
+                <tr>
+                  <td><input class="device-check" type="checkbox" name="device_ids" value="{{ device.id }}"></td>
+                  <td>
+                    <strong>{{ device.name }}</strong>
+                    {% if device.id == current_id %}<span class="badge">지금 이 기기</span>{% endif %}
+                    <div class="muted">{{ device.user_agent[:90] }}</div>
+                  </td>
+                  <td>{{ device.created_at | kst }}<div class="muted">{{ device.created_ip }}</div></td>
+                  <td>{{ device.last_seen_at | kst }}<div class="muted">{{ device.last_ip }}</div></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="bar">
+            <button class="danger" type="submit">선택 기기 해제</button>
+          </div>
+        </form>
+        <form method="post" action="/logout" onsubmit="return confirm('이 기기를 해제하고 로그아웃할까요?');">
+          <div class="bar"><button class="secondary" type="submit">이 기기 로그아웃</button></div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

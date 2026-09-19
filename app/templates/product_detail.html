@@ -275,6 +275,28 @@
         white-space: nowrap;
       }
 
+      .bulk-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0;
+      }
+
+      .bulk-all {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+        font-weight: 600;
+      }
+
+      .bulk-all input,
+      .source-check {
+        width: 18px;
+        height: 18px;
+      }
+
       button.danger {
         color: #7f1d1d;
         background: #fee2e2;
@@ -600,9 +622,18 @@
                 <strong>🗺️ 지도에서 선택</strong>하면 찍은 위치 기준 <strong>반경 검색</strong>이 됩니다. 마지막 지역은 자동 저장됩니다.
               </p>
             {% endif %}
+            <form id="bulkSourceForm" class="bulk-bar" method="post" action="/products/{{ product.id }}/sources/bulk"
+                  onsubmit="return confirmBulkSources(event);">
+              <label class="bulk-all"><input type="checkbox" onchange="toggleSourceChecks(this)"> 전체 선택</label>
+              <span class="muted" id="bulkSourceCount">0개 선택</span>
+              <button class="secondary" type="submit" name="action" value="enable">선택 켜기</button>
+              <button class="secondary" type="submit" name="action" value="disable">선택 끄기</button>
+              <button class="danger" type="submit" name="action" value="delete">선택 삭제</button>
+            </form>
             <table>
               <thead>
                 <tr>
+                  <th></th>
                   <th>편의점</th>
                   <th>상품</th>
                   <th>상태</th>
@@ -612,6 +643,8 @@
               <tbody>
                 {% for source in product.sources %}
                   <tr>
+                    <td><input class="source-check" type="checkbox" name="source_ids" value="{{ source.id }}"
+                               form="bulkSourceForm" onchange="updateSourceCount()"></td>
                     <td>{{ source.brand }}</td>
                     <td>
                       <strong>{{ source.external_product_name }}</strong>
@@ -723,6 +756,16 @@
 
       function loadMore() { _search.page += 1; fetchPage(); }
 
+      // Like the store apps: reaching the bottom of the list loads the next page.
+      // The "더 보기" button stays as a fallback.
+      document.getElementById('modalList').addEventListener('scroll', (e) => {
+        const el = e.currentTarget;
+        const moreVisible = document.getElementById('moreBtn').style.display !== 'none';
+        if (moreVisible && !_search.loading && el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+          loadMore();
+        }
+      });
+
       function fetchPage() {
         if (_search.loading) return;
         _search.loading = true;
@@ -778,13 +821,29 @@
         let note = '';
         if (hasMore) {
           note = ' (더 있음)';
-        } else if (_search.brand === 'seveneleven') {
-          note = ' · 7-11은 키워드당 노출이 제한적입니다. 더 구체적으로 검색해보세요 (예: "포켓몬" 대신 "포켓몬카드")';
         }
         status.textContent = `${total}건 표시${note}`;
         document.getElementById('moreBtn').style.display = hasMore ? 'block' : 'none';
         // Keep "전체 선택" in sync if it was on.
         if (document.getElementById('selectAll').checked) toggleAll(document.getElementById('selectAll'));
+      }
+
+      function toggleSourceChecks(box) {
+        document.querySelectorAll('.source-check').forEach((cb) => { cb.checked = box.checked; });
+        updateSourceCount();
+      }
+
+      function updateSourceCount() {
+        const n = document.querySelectorAll('.source-check:checked').length;
+        document.getElementById('bulkSourceCount').textContent = `${n}개 선택`;
+      }
+
+      function confirmBulkSources(event) {
+        const n = document.querySelectorAll('.source-check:checked').length;
+        if (!n) { alert('선택한 상품코드가 없습니다.'); return false; }
+        const action = event.submitter ? event.submitter.value : '';
+        if (action === 'delete') return confirm(`선택한 상품코드 ${n}개와 관련 감시를 삭제할까요?`);
+        return true;
       }
 
       function toggleAll(box) {

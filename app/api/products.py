@@ -1,6 +1,9 @@
 import asyncio
+import json
+from urllib.parse import quote
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -11,8 +14,12 @@ from app.repositories.products import (
     create_product,
     create_product_source,
     delete_product,
+    bulk_update_sources,
     delete_product_source,
+    delete_products,
+    export_products,
     get_product,
+    import_products,
     list_products,
     set_product_enabled,
     set_product_source_enabled,
@@ -103,15 +110,50 @@ async def _lookup_source_stock(source, keyword, latitude, longitude, radius_mete
 
 
 @router.get("", response_class=HTMLResponse)
-async def products_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+async def products_page(
+    request: Request,
+    imported: str | None = None,
+    import_error: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
     products = list_products(db)
     return templates.TemplateResponse(
         "products.html",
         {
             "request": request,
             "products": products,
+            "imported": imported,
+            "import_error": import_error,
         },
     )
+
+
+# Declared before "/{product_id}" so "export" isn't parsed as a product id.
+@router.get("/export")
+async def export_products_action(ids: str = "", db: Session = Depends(get_db)) -> JSONResponse:
+    """Download products + brand mappings as a JSON file (all, or ``ids=1,2``)."""
+    product_ids = [int(part) for part in ids.split(",") if part.strip().isdigit()]
+    payload = export_products(db, product_ids or None)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    return JSONResponse(
+        payload,
+        headers={"Content-Disposition": f'attachment; filename="products-{stamp}.json"'},
+    )
+
+
+@router.post("/import")
+async def import_products_action(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Re-register products from an exported JSON file (merges by display name)."""
+    try:
+        stats = import_products(db, json.loads(await file.read()))
+    except (ValueError, UnicodeDecodeError) as exc:
+        message = str(exc) if not isinstance(exc, json.JSONDecodeError) else "JSON 파일을 읽지 못했습니다."
+        return RedirectResponse(url=f"/products?import_error={quote(message)}", status_code=303)
+    summary = f"{stats['created']},{stats['merged']},{stats['sources']},{stats['skipped']}"
+    return RedirectResponse(url=f"/products?imported={summary}", status_code=303)
 
 
 @router.get("/{product_id}", response_class=HTMLResponse)
@@ -426,6 +468,21 @@ async def disable_product_source(
     return RedirectResponse(url=f"/products/{product_id}", status_code=303)
 
 
+@router.post("/{product_id}/sources/bulk")
+async def bulk_product_sources_action(
+    product_id: int,
+    action: str = Form(...),
+    source_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Delete / enable / disable the checked product codes in one go."""
+    if action not in ("delete", "enable", "disable"):
+        raise HTTPException(status_code=400, detail="Unknown bulk action")
+    if source_ids:
+        bulk_update_sources(db, product_id, source_ids, action)
+    return RedirectResponse(url=f"/products/{product_id}", status_code=303)
+
+
 @router.post("/{product_id}/sources/{source_id}/delete")
 async def delete_product_source_action(
     product_id: int,
@@ -453,6 +510,17 @@ async def enable_product(product_id: int, db: Session = Depends(get_db)) -> Redi
 @router.post("/{product_id}/disable")
 async def disable_product(product_id: int, db: Session = Depends(get_db)) -> RedirectResponse:
     set_product_enabled(db, product_id, False)
+    return RedirectResponse(url="/products", status_code=303)
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_products_action(
+    product_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Delete the checked products (with their codes and watches)."""
+    if product_ids:
+        delete_products(db, product_ids)
     return RedirectResponse(url="/products", status_code=303)
 
 

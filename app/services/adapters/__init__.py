@@ -66,6 +66,18 @@ async def search_products_page(brand: str | StoreBrand, keyword: str, page: int 
     return await func(keyword, page=page)
 
 
+def store_search_keyword(location_label: str | None) -> str | None:
+    """Store-search keyword for a location label.
+
+    Labels may carry a trailing note to tell same-district spots apart
+    (e.g. "동작구(상도)"); store search matches plain text, so only the part
+    before the parenthesis is sent.
+    """
+    if location_label is None:
+        return None
+    return location_label.split("(", 1)[0].strip() or location_label.strip()
+
+
 async def check_stock(
     brand: str | StoreBrand,
     product_code: str,
@@ -85,6 +97,7 @@ async def check_stock(
         resolved = StoreBrand(brand)
     except ValueError:
         return None
+    store_keyword = store_search_keyword(store_keyword)
 
     if resolved is StoreBrand.SEVEN_ELEVEN:
         return await check_seveneleven_stock(

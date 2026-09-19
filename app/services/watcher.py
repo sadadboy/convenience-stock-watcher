@@ -30,16 +30,17 @@ from app.services.store_adapter import StockLookup
 logger = logging.getLogger(__name__)
 
 
-def _push_discord(db: Session, source, summary: str, result: StockLookup) -> None:
+def _push_discord(db: Session, watch: StockWatch, summary: str, result: StockLookup) -> None:
     """Send a restock alert to Discord if a webhook is configured. Never raises."""
     webhook = get_discord_webhook(db)
     if not webhook:
         return
+    source = watch.source
     title = f"🔔 입고! [{source.brand}] {source.external_product_name}"
     message = (
         f"상품코드 {source.external_product_code}\n"
         f"재고 있는 매장 {result.in_stock_count}곳 · {summary}\n"
-        f"조회 범위: {result.context}"
+        f"감시 위치: {watch.location_query} · 조회 범위: {result.context}"
     )
     ok, error = send_discord_message(webhook, title, message)
     if not ok:
@@ -148,7 +149,7 @@ def _apply_result(
             "🔔 RESTOCK alert: watch %s (%s %s) -> %s",
             watch.id, source.brand, source.external_product_code, summary,
         )
-        _push_discord(db, source, summary, result)
+        _push_discord(db, watch, summary, result)
     else:
         decision = decide_stock_missing(
             check_interval_seconds=watch.check_interval_seconds,

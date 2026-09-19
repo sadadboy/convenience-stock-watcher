@@ -13,6 +13,7 @@ gracefully instead of raising.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -92,9 +93,12 @@ def _parse_candidates(payload: Any) -> list[ProductCandidate]:
     candidates: list[ProductCandidate] = []
     seen_codes: set[str] = set()
 
+    # In-store ("offline") items first: those are what stock lookups can find.
+    collections = sorted(
+        (c for c in collections if isinstance(c, dict)),
+        key=lambda c: c.get("CollectionId") != "offline",
+    )
     for collection in collections:
-        if not isinstance(collection, dict):
-            continue
         document_set = collection.get("Documentset") or {}
         documents = document_set.get("Document") or []
         for document in documents:
@@ -120,12 +124,49 @@ def _parse_candidates(payload: Any) -> list[ProductCandidate]:
     return candidates
 
 
-async def search_seveneleven_products(keyword: str, *, page: int = 1) -> SearchPage:
-    """Search 7-Eleven candidates by name. Never raises.
+# The search engine ignores offsets past ~40 (returns nothing) but happily
+# returns every match in one call, so we fetch everything once and serve pages
+# from a short-lived cache while the user scrolls.
+_FULL_FETCH_COUNT = 1000
+_CACHE_TTL_SECONDS = 300
+_CACHE_MAX_ENTRIES = 32
+_search_cache: dict[str, tuple[float, list[ProductCandidate]]] = {}
 
-    7-Eleven's pageNo paging is unreliable (collections re-return the same
-    items), so we fetch a single large page that captures all unique matches;
-    ``has_more`` is always False.
+
+async def _fetch_all_candidates(query: str) -> list[ProductCandidate] | None:
+    """All candidates for a query (cached). None on network/parse failure."""
+    now = time.monotonic()
+    cached = _search_cache.get(query)
+    if cached and now - cached[0] < _CACHE_TTL_SECONDS:
+        return cached[1]
+
+    url = settings.seveneleven_base_url.rstrip("/") + settings.seveneleven_search_path
+    body = {"query": query, "startCount": 0, "listCount": _FULL_FETCH_COUNT}
+    try:
+        async with httpx.AsyncClient(timeout=settings.adapter_request_timeout) as client:
+            response = await client.post(url, headers=_SEARCH_HEADERS, json=body)
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("7-Eleven product search network error for %r: %s", query, exc)
+        return None
+    except ValueError as exc:
+        logger.warning("7-Eleven product search returned invalid JSON for %r: %s", query, exc)
+        return None
+
+    candidates = _parse_candidates(payload)
+    if len(_search_cache) >= _CACHE_MAX_ENTRIES:
+        _search_cache.pop(min(_search_cache, key=lambda key: _search_cache[key][0]))
+    _search_cache[query] = (now, candidates)
+    return candidates
+
+
+async def search_seveneleven_products(keyword: str, *, page: int = 1) -> SearchPage:
+    """Search one page of 7-Eleven candidates by name. Never raises.
+
+    ``pageNo``/``pageSize`` are ignored upstream (each collection is capped at
+    10) and ``startCount`` stops working past ~40, so all matches are fetched
+    in one call and paged locally.
     """
 
     query = keyword.strip()
@@ -135,27 +176,19 @@ async def search_seveneleven_products(keyword: str, *, page: int = 1) -> SearchP
             logger.info("7-Eleven live search disabled; returning no candidates for %r", query)
         return SearchPage(candidates=[], page=page, has_more=False)
 
-    if page > 1:  # everything is returned on page 1
+    candidates = await _fetch_all_candidates(query)
+    if candidates is None:
         return SearchPage(candidates=[], page=page, has_more=False)
 
-    url = settings.seveneleven_base_url.rstrip("/") + settings.seveneleven_search_path
-    body = {"query": query, "pageNo": 0, "pageSize": 100}
-
-    try:
-        async with httpx.AsyncClient(timeout=settings.adapter_request_timeout) as client:
-            response = await client.post(url, headers=_SEARCH_HEADERS, json=body)
-            response.raise_for_status()
-            payload = response.json()
-    except httpx.HTTPError as exc:
-        logger.warning("7-Eleven product search network error for %r: %s", query, exc)
-        return SearchPage(candidates=[], page=page, has_more=False)
-    except ValueError as exc:
-        logger.warning("7-Eleven product search returned invalid JSON for %r: %s", query, exc)
-        return SearchPage(candidates=[], page=page, has_more=False)
-
-    candidates = _parse_candidates(payload)
-    logger.info("7-Eleven search %r -> %d candidate(s)", query, len(candidates))
-    return SearchPage(candidates=candidates, page=1, has_more=False)
+    limit = settings.seveneleven_search_limit
+    start = (page - 1) * limit
+    page_items = candidates[start : start + limit]
+    has_more = start + limit < len(candidates)
+    logger.info(
+        "7-Eleven search %r page %d -> %d of %d candidate(s) (more=%s)",
+        query, page, len(page_items), len(candidates), has_more,
+    )
+    return SearchPage(candidates=page_items, page=page, has_more=has_more)
 
 
 def _to_int(value: Any) -> int:

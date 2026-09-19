@@ -110,6 +110,11 @@
           <p>입고가 감지되면 디스코드로 푸시 알림을 보냅니다. /watches 상단에서 웹훅을 설정하세요.</p>
           <p class="count">{{ '설정됨 ✅' if discord_configured else '미설정 — 설정하기' }}</p>
         </a>
+        <a class="card" href="/devices">
+          <h2>🔐 등록된 기기</h2>
+          <p>이 앱에 들어올 수 있는 기기 목록입니다. 잃어버린 기기는 여기서 해제하세요.</p>
+          <p class="count">{{ device_count }}대 등록</p>
+        </a>
       </section>
     </main>
   </body>

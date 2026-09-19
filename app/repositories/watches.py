@@ -140,18 +140,26 @@ def create_watches_for_product(
         return 0
 
     keyword = location_query.strip()
-    target_key = (keyword, latitude, longitude, radius_meters)
     # A source may be watched at multiple locations; only skip the *same* location.
+    # Map locations are identified by their coordinates, so a watch whose label
+    # was renamed (e.g. "동작구" -> "동작구(상도)") still counts as the same spot.
+    if latitude is not None and longitude is not None:
+        target_key = (latitude, longitude, radius_meters)
+
+        def location_key(w: StockWatch):
+            return (w.latitude, w.longitude, w.radius_meters)
+    else:
+        target_key = (keyword, None, None, None)
+
+        def location_key(w: StockWatch):
+            return (w.location_query, w.latitude, w.longitude, w.radius_meters)
+
     existing = db.scalars(
         select(StockWatch).where(
             StockWatch.product_source_id.in_([s.id for s in sources])
         )
     )
-    already = {
-        w.product_source_id
-        for w in existing
-        if (w.location_query, w.latitude, w.longitude, w.radius_meters) == target_key
-    }
+    already = {w.product_source_id for w in existing if location_key(w) == target_key}
     now = datetime.now(timezone.utc)
     to_create = [s for s in sources if s.id not in already]
     # Spread first checks evenly across the interval so they don't burst together.

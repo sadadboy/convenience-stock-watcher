@@ -160,6 +160,51 @@
         font-weight: 700;
       }
 
+      .notice {
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-weight: 600;
+      }
+
+      .notice.ok {
+        color: #065f46;
+        background: #d1fae5;
+      }
+
+      .notice.error {
+        color: #7f1d1d;
+        background: #fee2e2;
+      }
+
+      .bulk-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .bulk-all {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+      }
+
+      .bulk-all input,
+      .product-check {
+        width: 18px;
+        height: 18px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .backup .button-link {
+        margin-bottom: 4px;
+      }
+
       @media (max-width: 760px) {
         .layout {
           grid-template-columns: 1fr;
@@ -172,7 +217,16 @@
       <nav><a href="/">← Dashboard</a> · <a href="/watches">입고 감시 →</a></nav>
       <h1>Products</h1>
 
+      {% if imported %}
+        {% set n = imported.split(',') %}
+        <p class="notice ok">불러오기 완료 · 새 상품 {{ n[0] }}개, 기존 상품에 합침 {{ n[1] }}개, 상품코드 {{ n[2] }}개 추가 (이미 있던 {{ n[3] }}개는 건너뜀)</p>
+      {% endif %}
+      {% if import_error %}
+        <p class="notice error">불러오기 실패 · {{ import_error }}</p>
+      {% endif %}
+
       <section class="layout">
+        <div class="stack">
         <form class="panel" method="post" action="/products">
           <h2>상품 등록</h2>
 
@@ -188,12 +242,30 @@
           <button class="submit" type="submit">등록</button>
         </form>
 
+        <section class="panel backup">
+          <h2>저장 · 불러오기</h2>
+          <p class="muted">상품과 편의점별 상품코드를 파일로 저장해 두었다가 한 번에 다시 등록합니다. 이름이 같은 상품이 있으면 없는 상품코드만 추가합니다.</p>
+          <a class="button-link" href="/products/export">전체 저장 (JSON)</a>
+          <form method="post" action="/products/import" enctype="multipart/form-data">
+            <label for="import_file">불러올 파일</label>
+            <input id="import_file" type="file" name="file" accept=".json,application/json" required>
+            <button class="submit" type="submit">불러오기</button>
+          </form>
+        </section>
+        </div>
+
         <section class="panel">
           <h2>등록된 상품</h2>
           {% if products %}
+            <form id="bulkProductForm" class="bulk-bar" method="post" action="/products/bulk-delete"
+                  onsubmit="const n = document.querySelectorAll('.product-check:checked').length; if (!n) { alert('선택한 상품이 없습니다.'); return false; } return confirm(`선택한 상품 ${n}개와 등록된 상품코드·감시를 모두 삭제할까요?`);">
+              <label class="bulk-all"><input type="checkbox" onchange="document.querySelectorAll('.product-check').forEach((cb) => { cb.checked = this.checked; })"> 전체 선택</label>
+              <button class="danger" type="submit">선택 삭제</button>
+            </form>
             <table>
               <thead>
                 <tr>
+                  <th></th>
                   <th>상품</th>
                   <th>검색 키워드</th>
                   <th>상태</th>
@@ -203,6 +275,7 @@
               <tbody>
                 {% for product in products %}
                   <tr>
+                    <td><input class="product-check" type="checkbox" name="product_ids" value="{{ product.id }}" form="bulkProductForm"></td>
                     <td>
                       <strong>{{ product.display_name }}</strong>
                       <div class="muted">매핑 {{ product.sources | length }}개</div>
@@ -221,6 +294,7 @@
                     <td>
                       <div class="actions">
                         <a class="button-link" href="/products/{{ product.id }}">매핑</a>
+                        <a class="button-link secondary" href="/products/export?ids={{ product.id }}">저장</a>
                       {% if product.enabled %}
                         <form class="inline-form" method="post" action="/products/{{ product.id }}/disable">
                           <button class="secondary" type="submit">끄기</button>

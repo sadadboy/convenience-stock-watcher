@@ -178,33 +178,44 @@ def _to_int(value: Any) -> int:
         return 0
 
 
+# The store search returns 40 stores per page; a busy 구 spans several pages.
+_STORE_MAX_PAGES = 10
+
+
 async def _fetch_stores(client: httpx.AsyncClient, store_keyword: str, limit: int) -> dict[str, dict]:
     """Search Emart24 stores by keyword. Returns {bizNo(CODE): {name, address}}."""
     url = settings.emart24_web_base_url.rstrip("/") + settings.emart24_store_search_path
-    response = await client.get(
-        url,
-        headers=_SEARCH_HEADERS,
-        params={"page": "1", "search": store_keyword},
-    )
-    response.raise_for_status()
-    payload = response.json()
-
     stores: dict[str, dict] = {}
-    rows = payload.get("data") if isinstance(payload, dict) else None
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        code = str(row.get("CODE") or "").strip()
-        if not code or code in stores:
-            continue
-        if len(stores) >= limit:
+
+    for page in range(1, _STORE_MAX_PAGES + 1):
+        response = await client.get(
+            url,
+            headers=_SEARCH_HEADERS,
+            params={"page": str(page), "search": store_keyword},
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not rows:
             break
-        stores[code] = {
-            "name": str(row.get("TITLE") or "").strip(),
-            "address": str(row.get("ADDRESS") or "").strip(),
-            "latitude": _to_float(row.get("LATITUDE")),
-            "longitude": _to_float(row.get("LONGITUDE")),
-        }
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("CODE") or "").strip()
+            if not code or code in stores:
+                continue
+            if len(stores) >= limit:
+                return stores
+            stores[code] = {
+                "name": str(row.get("TITLE") or "").strip(),
+                "address": str(row.get("ADDRESS") or "").strip(),
+                "latitude": _to_float(row.get("LATITUDE")),
+                "longitude": _to_float(row.get("LONGITUDE")),
+            }
+        total = _to_int(payload.get("count")) if isinstance(payload, dict) else 0
+        if len(stores) >= total:
+            break
     return stores
 
 

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>기기 등록 · Convenience Stock Watcher</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1f2937;
+        background: #f6f7f9;
+      }
+
+      main {
+        max-width: 380px;
+        margin: 0 auto;
+        padding: 64px 20px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+      }
+
+      .panel {
+        border: 1px solid #dfe3e8;
+        border-radius: 8px;
+        padding: 20px;
+        background: #ffffff;
+      }
+
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+
+      button {
+        width: 100%;
+        margin-top: 18px;
+        border: 0;
+        border-radius: 8px;
+        padding: 11px 12px;
+        font: inherit;
+        font-weight: 700;
+        color: #ffffff;
+        background: #1f2937;
+        cursor: pointer;
+      }
+
+      .muted {
+        color: #6b7280;
+        font-size: 14px;
+      }
+
+      .error {
+        border-radius: 8px;
+        padding: 10px 12px;
+        color: #7f1d1d;
+        background: #fee2e2;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>기기 등록</h1>
+      <p class="muted">처음 쓰는 기기는 비밀번호로 한 번 등록합니다. 등록한 기기는 다음부터 바로 들어옵니다.</p>
+      {% if not configured %}
+        <p class="error">서버에 AUTH_PASSWORD가 설정되지 않아 로그인할 수 없습니다. .env에 설정한 뒤 앱을 재시작하세요.</p>
+      {% else %}
+        <form class="panel" method="post" action="/login">
+          {% if error %}<p class="error">{{ error }}</p>{% endif %}
+          <input type="hidden" name="next" value="{{ next }}">
+          <label for="password">비밀번호</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+          <label for="device_name">기기 이름</label>
+          <input id="device_name" name="device_name" value="{{ device_name }}" maxlength="100">
+          <button type="submit">이 기기 등록</button>
+        </form>
+      {% endif %}
+    </main>
+  </body>
+</html>

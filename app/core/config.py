@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     seveneleven_search_enabled: bool = True
     seveneleven_base_url: str = "https://new.7-elevenapp.co.kr"
     seveneleven_search_path: str = "/api/v1/open/search/goods"
-    seveneleven_search_limit: int = 20
+    seveneleven_search_limit: int = 30
 
     # 7-Eleven real-time stock (itemCd -> smCd meta -> store search -> real-stock).
     seveneleven_stock_enabled: bool = True
@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     # How many stock lookups run at once within a tick. Lookups are pure network
     # I/O, so running them serially was what pushed a tick past the poll window.
     watcher_concurrency: int = 12
+
+    # Device login. A new device enters this password once and is remembered
+    # (cookie) for auth_device_days. Empty = nobody can log in (fail closed).
+    auth_password: str = ""
+    auth_device_days: int = 365
+    # Set true once the app is served over HTTPS.
+    auth_cookie_secure: bool = False
 
     # Discord push alerts. Fallback if no webhook is saved in the UI.
     discord_webhook_url: str = ""

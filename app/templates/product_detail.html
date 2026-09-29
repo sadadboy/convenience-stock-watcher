@@ -417,6 +417,9 @@
       .map-foot .spacer { flex: 1; }
       .map-foot label { margin: 0; }
       .map-foot input[type="number"] { width: 90px; }
+      .map-top { display: flex; align-items: center; gap: 10px; padding: 10px 16px 0; flex-wrap: wrap; }
+      .map-top .spacer { flex: 1; }
+      .map-top button { flex: none; padding: 4px 10px; font-size: 0.9em; }
       dialog#mapModal { width: min(720px, 94vw); border: 1px solid #d1d5db; border-radius: 12px; padding: 0; }
       dialog#mapModal::backdrop { background: rgba(15, 23, 42, 0.45); }
     </style>
@@ -717,7 +720,11 @@
           <strong>지도에서 위치 선택</strong>
           <button type="button" class="secondary" onclick="closeMap()">✕</button>
         </div>
-        <div id="modalStatus2" class="muted" style="padding:10px 16px 0;">지도를 클릭해 중심을 정하고 반경을 조절하세요.</div>
+        <div class="map-top">
+          <span id="modalStatus2" class="muted">지도를 클릭해 중심을 정하고 반경을 조절하세요.</span>
+          <span class="spacer"></span>
+          <button type="button" id="locBtn" class="secondary" onclick="locateMe()">📍 내 위치</button>
+        </div>
         <div style="padding:12px 16px;"><div id="map"></div></div>
         <form class="map-foot" method="post" action="/products/{{ product.id }}/location">
           <label>반경(m)
@@ -937,6 +944,40 @@
         const r = parseInt(document.getElementById('radiusInput').value, 10) || 1000;
         if (_circle) { _circle.setLatLng([_picked.lat, _picked.lon]); _circle.setRadius(r); }
         else { _circle = L.circle([_picked.lat, _picked.lon], { radius: r, color: '#2563eb' }).addTo(_map); }
+      }
+
+      function locateMe() {
+        const btn = document.getElementById('locBtn');
+        const status = document.getElementById('modalStatus2');
+        if (!navigator.geolocation) {
+          status.textContent = '이 브라우저에서는 내 위치를 쓸 수 없습니다. 지도를 클릭해 직접 고르세요.';
+          return;
+        }
+        if (!window.isSecureContext) {
+          status.textContent = '내 위치는 HTTPS(또는 localhost)에서만 됩니다. 지도를 클릭해 직접 고르세요.';
+          return;
+        }
+        btn.disabled = true;
+        status.textContent = '내 위치를 찾는 중…';
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            btn.disabled = false;
+            const { latitude, longitude, accuracy } = pos.coords;
+            setPoint(latitude, longitude);
+            _map.setView([latitude, longitude], 15);
+            status.textContent = `내 위치로 이동했습니다(오차 약 ${Math.round(accuracy)}m). 필요하면 지도를 클릭해 조정하세요.`;
+          },
+          (err) => {
+            btn.disabled = false;
+            const msgs = {
+              1: '위치 권한이 거부됐습니다. 브라우저 주소창의 권한 설정에서 허용해 주세요.',
+              2: '위치를 확인할 수 없습니다. 지도를 클릭해 직접 고르세요.',
+              3: '위치 확인이 너무 오래 걸립니다. 다시 시도해 주세요.',
+            };
+            status.textContent = msgs[err.code] || `위치를 가져오지 못했습니다: ${err.message}`;
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+        );
       }
 
       function closeMap() {

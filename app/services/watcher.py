@@ -1,13 +1,17 @@
 """Restock watcher: poll due watches, record events, raise restock alerts.
 
-Alerts are delivered to the app log and the ``stock_watch_events`` table (shown
-on the /watches screen). Real push channels (Discord/Telegram) can be added
-later without changing this logic.
+Watches never pause on stock. Alerts fire on per-store *changes* only: a store
+that newly has stock (🔔 입고), an announced store whose quantity changed
+(📉/📈 재고 변동), and an announced store that sold out (⚪ 품절). So silence on
+Discord always means "same as the last message", quantities included.
+Lookup failures are announced once too, so they can't pass for silence.
+Alerts go to the app log, ``stock_watch_events`` (/watches screen) and Discord.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -15,36 +19,51 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
-from app.domain.alerts import (
-    StockStatus,
-    WatchStatus,
-    decide_stock_found,
-    decide_stock_missing,
-)
+from app.domain.alerts import StockStatus, WatchStatus, next_check_time
 from app.models.restock import StockWatch, StockWatchEvent
 from app.repositories.notifications import get_discord_webhook
 from app.services.adapters import check_stock
-from app.services.notifications import send_discord_message
-from app.services.store_adapter import StockLookup
+from app.services.notifications import (
+    COLOR_RESTOCK,
+    COLOR_SOLD_OUT,
+    COLOR_WARNING,
+    send_discord_message,
+    store_map_link,
+)
+from app.services.store_adapter import StockLookup, StoreStock
 
 logger = logging.getLogger(__name__)
 
 
-def _push_discord(db: Session, watch: StockWatch, summary: str, result: StockLookup) -> None:
-    """Send a restock alert to Discord if a webhook is configured. Never raises."""
+def _push_discord(db: Session, title: str, message: str, *, color: int, watch_id: int) -> None:
+    """Send an alert to Discord if a webhook is configured. Never raises."""
     webhook = get_discord_webhook(db)
     if not webhook:
         return
-    source = watch.source
-    title = f"🔔 입고! [{source.brand}] {source.external_product_name}"
-    message = (
-        f"상품코드 {source.external_product_code}\n"
-        f"재고 있는 매장 {result.in_stock_count}곳 · {summary}\n"
-        f"감시 위치: {watch.location_query} · 조회 범위: {result.context}"
-    )
-    ok, error = send_discord_message(webhook, title, message)
+    ok, error = send_discord_message(webhook, title, message, color=color)
     if not ok:
-        logger.warning("Discord push failed for watch source %s: %s", source.id, error)
+        logger.warning("Discord push failed for watch %s: %s", watch_id, error)
+
+
+def _watch_label(watch: StockWatch) -> str:
+    source = watch.source
+    return f"[{source.brand}] {source.external_product_name}"
+
+
+def _watch_footer(watch: StockWatch, result: StockLookup | None = None) -> str:
+    line = f"상품코드 {watch.source.external_product_code} · 감시 위치: {watch.location_query}"
+    if result is not None and result.context:
+        line += f" · 조회 범위: {result.context}"
+    return line
+
+
+def load_alerted_stores(watch: StockWatch) -> dict[str, dict]:
+    """Announced in-stock stores as {store_code: {"name": str, "qty": int | None}}."""
+    try:
+        data = json.loads(watch.alerted_stores or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 async def _lookup_stock(watch: StockWatch) -> StockLookup | None:
@@ -60,17 +79,28 @@ async def _lookup_stock(watch: StockWatch) -> StockLookup | None:
     )
 
 
-def _summarize(result: StockLookup, limit: int = 5, *, fallback_price: int | None = None) -> str:
+def _summarize(
+    stores: list[StoreStock],
+    limit: int = 5,
+    *,
+    fallback_price: int | None = None,
+    link_brand: str | None = None,
+) -> str:
     """Render the in-stock stores with their price.
+
+    With ``link_brand`` (Discord only), each store name links to Kakao Map.
 
     GS25 returns a per-store price; 7-Eleven and Emart24 do not, so those fall
     back to ``fallback_price`` (the price captured when the product code was
     mapped), which for those brands is a fixed nationwide price.
     """
-    in_stock = [s for s in result.stores if s.in_stock]
+    in_stock = [s for s in stores if s.in_stock]
     parts = []
     for s in in_stock[:limit]:
-        label = f"{s.store_name or s.store_code} {s.quantity}개"
+        name = s.store_name or s.store_code
+        if link_brand:
+            name = store_map_link(name, s.address, link_brand)
+        label = f"{name} {s.quantity}개"
         price = s.price or fallback_price
         if price:
             label += f" ({price:,}원)"
@@ -114,60 +144,135 @@ def _apply_result(
         watch.next_retry_at = now + _seconds(watch.failure_retry_seconds)
         event = _add_event(db, watch, kind="error", status="failed", quantity=None, message=message)
         logger.warning("watch %s failed: %s", watch.id, message)
+        if watch.failure_count == 1:
+            retry_min = max(watch.failure_retry_seconds // 60, 1)
+            _push_discord(
+                db,
+                f"⚠️ 조회 실패 {_watch_label(watch)}",
+                f"{message}\n{retry_min}분 후 다시 시도합니다. 복구되기 전까지는 재고 알림이 오지 않아요.\n"
+                + _watch_footer(watch),
+                color=COLOR_WARNING,
+                watch_id=watch.id,
+            )
         db.commit()
         return event
 
+    recovered = watch.failure_count > 0
     watch.last_error = None
     watch.failure_count = 0
-    in_stock = result.in_stock_count > 0
+    watch.status = WatchStatus.ACTIVE.value
+    watch.next_check_at = next_check_time(check_interval_seconds=watch.check_interval_seconds, now=now)
+    watch.paused_until = None
+    watch.alert_count = 0
+
+    in_stock_stores = [s for s in result.stores if s.in_stock]
+    current = {
+        s.store_code: {"name": s.store_name or s.store_code, "qty": s.quantity, "addr": s.address}
+        for s in in_stock_stores
+    }
+    previous = load_alerted_stores(watch)
+    appeared = [s for s in in_stock_stores if s.store_code not in previous]
+    changed = [
+        (s, previous[s.store_code].get("qty"))
+        for s in in_stock_stores
+        if s.store_code in previous and previous[s.store_code].get("qty") != s.quantity
+    ]
+    sold_out = [entry.get("name", code) for code, entry in previous.items() if code not in current]
+    watch.alerted_stores = json.dumps(current, ensure_ascii=False) if current else None
+
     total_qty = result.total_quantity
+    summary = _summarize(in_stock_stores, fallback_price=source.price) if current else None
+    watch.last_stock_status = (StockStatus.IN_STOCK if current else StockStatus.OUT_OF_STOCK).value
+    watch.last_stock_quantity = total_qty if current else 0
+    watch.last_in_stock_summary = summary
 
-    if in_stock:
-        summary = _summarize(result, fallback_price=source.price)
-        decision = decide_stock_found(
-            current_alert_count=watch.alert_count,
-            max_alert_count=watch.max_alert_count,
-            check_interval_seconds=watch.check_interval_seconds,
-            pause_after_alerts_seconds=watch.pause_after_alerts_seconds,
-            now=now,
-        )
-        watch.last_stock_status = StockStatus.IN_STOCK.value
-        watch.last_stock_quantity = total_qty
-        watch.last_in_stock_summary = summary
-        watch.alert_count = decision.alert_count
-        watch.status = decision.next_status.value
-        watch.next_check_at = decision.next_check_at
-        watch.paused_until = decision.paused_until
+    now_line = (
+        f"현재 재고 있는 매장 {len(current)}곳: {summary}"
+        if current
+        else "현재 재고 있는 매장 없음 · 계속 감시 중"
+    )
+    footer = _watch_footer(watch, result)
+    events: list[StockWatchEvent] = []
+
+    if appeared:
+        new_summary = _summarize(appeared, fallback_price=source.price)
+        linked_summary = _summarize(appeared, fallback_price=source.price, link_brand=source.brand)
         watch.last_alerted_at = now
-
-        message = f"입고 감지! {result.in_stock_count}개 매장 · {summary} ({result.context})"
-        event = _add_event(
+        events.append(_add_event(
             db, watch, kind="restock", status="in_stock", quantity=total_qty,
-            message=message, is_alert=True,
-        )
+            message=f"입고 감지! 새 매장 {len(appeared)}곳 · {new_summary} ({result.context})",
+            is_alert=True,
+        ))
         logger.warning(
             "🔔 RESTOCK alert: watch %s (%s %s) -> %s",
-            watch.id, source.brand, source.external_product_code, summary,
+            watch.id, source.brand, source.external_product_code, new_summary,
         )
-        _push_discord(db, watch, summary, result)
-    else:
-        decision = decide_stock_missing(
-            check_interval_seconds=watch.check_interval_seconds,
-            now=now,
+        _push_discord(
+            db,
+            f"🔔 입고! {_watch_label(watch)}",
+            f"새로 입고된 매장 {len(appeared)}곳: {linked_summary}\n{now_line}\n{footer}",
+            color=COLOR_RESTOCK,
+            watch_id=watch.id,
         )
-        watch.last_stock_status = StockStatus.OUT_OF_STOCK.value
-        watch.last_stock_quantity = 0
-        watch.last_in_stock_summary = None
-        watch.alert_count = decision.alert_count
-        watch.status = decision.next_status.value
-        watch.next_check_at = decision.next_check_at
-        watch.paused_until = None
+    if changed:
+        decreased = any((s.quantity or 0) < (old or 0) for s, old in changed)
+        def change_line(s: StoreStock, old: int | None, name: str) -> str:
+            return f"{name} {old if old is not None else '?'}개 → {s.quantity}개"
 
-        message = f"재고 없음 (조회 {result.scanned_count}개 매장, {result.context})"
-        event = _add_event(db, watch, kind="check", status="out_of_stock", quantity=0, message=message)
+        lines = ", ".join(change_line(s, old, s.store_name or s.store_code) for s, old in changed)
+        linked_lines = ", ".join(
+            change_line(s, old, store_map_link(s.store_name or s.store_code, s.address, source.brand))
+            for s, old in changed
+        )
+        watch.last_alerted_at = now
+        events.append(_add_event(
+            db, watch, kind="quantity", status=watch.last_stock_status, quantity=total_qty,
+            message=f"재고 변동: {lines}", is_alert=True,
+        ))
+        logger.warning("📊 QUANTITY change: watch %s -> %s", watch.id, lines)
+        _push_discord(
+            db,
+            f"{'📉 재고 감소' if decreased else '📈 재고 증가'} {_watch_label(watch)}",
+            f"{linked_lines}\n{now_line}\n{footer}",
+            color=COLOR_WARNING if decreased else COLOR_RESTOCK,
+            watch_id=watch.id,
+        )
+    if sold_out:
+        gone = ", ".join(sold_out)
+        watch.last_alerted_at = now
+        events.append(_add_event(
+            db, watch, kind="sold_out", status=watch.last_stock_status, quantity=total_qty,
+            message=f"품절: {gone}", is_alert=True,
+        ))
+        logger.warning("⚪ SOLD OUT: watch %s -> %s", watch.id, gone)
+        _push_discord(
+            db,
+            f"⚪ 품절 {_watch_label(watch)}",
+            f"재고가 사라진 매장: {gone}\n{now_line}\n{footer}",
+            color=COLOR_SOLD_OUT,
+            watch_id=watch.id,
+        )
+    if recovered and not events:
+        _push_discord(
+            db,
+            f"✅ 조회 복구 {_watch_label(watch)}",
+            f"{now_line}\n{footer}",
+            color=COLOR_RESTOCK if current else COLOR_SOLD_OUT,
+            watch_id=watch.id,
+        )
+    if not events:
+        message = (
+            f"재고 유지 {len(current)}개 매장 · {summary} ({result.context})"
+            if current
+            else f"재고 없음 (조회 {result.scanned_count}개 매장, {result.context})"
+        )
+        events.append(_add_event(
+            db, watch, kind="check", status=watch.last_stock_status,
+            quantity=watch.last_stock_quantity, message=message,
+        ))
 
     db.commit()
-    return event
+    return events[0]
 
 
 async def _lookup_many(watches: list[StockWatch]) -> list[StockLookup | None | BaseException]:

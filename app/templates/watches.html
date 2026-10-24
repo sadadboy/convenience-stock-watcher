@@ -250,18 +250,15 @@
                   </div>
                   <div class="group-progress muted" id="prog-{{ pid }}"></div>
                   <details class="group-settings">
-                    <summary class="muted">⚙️ 설정 (조회 간격 · 최대 알림)</summary>
+                    <summary class="muted">⚙️ 설정 (조회 간격)</summary>
                     <form method="post" action="/watches/group/settings" class="settings-form">
                       <input type="hidden" name="watch_ids" value="{{ g.watch_ids }}">
                       <label>조회 간격(초)
                         <input name="check_interval_seconds" type="number" min="30" value="{{ g.interval }}">
                       </label>
-                      <label>최대 알림 횟수
-                        <input name="max_alert_count" type="number" min="1" value="{{ g.max_alert_count }}">
-                      </label>
                       <button type="submit">저장</button>
                     </form>
-                    <p class="muted" style="margin:6px 0 0;">간격을 바꾸면 이 그룹의 조회 시각이 다시 고르게 분산됩니다. 재고 발견 시 최대 {{ g.max_alert_count }}회 알림 후 잠시 멈춥니다.</p>
+                    <p class="muted" style="margin:6px 0 0;">간격을 바꾸면 이 그룹의 조회 시각이 다시 고르게 분산됩니다. 멈추지 않고 계속 감시하며, 매장별로 입고·품절이 바뀔 때만 디스코드로 알립니다.</p>
                   </details>
                   <details>
                     <summary class="muted">개별 상품코드 {{ g.total }}개 펼치기</summary>
@@ -362,6 +359,8 @@
                   </td>
                   <td>
                     {% if e.kind == 'restock' %}<span class="badge restock">🔔 입고</span>
+                    {% elif e.kind == 'quantity' %}<span class="badge stock">📊 변동</span>
+                    {% elif e.kind == 'sold_out' %}<span class="badge paused">⚪ 품절</span>
                     {% elif e.kind == 'error' %}<span class="badge failed">오류</span>
                     {% else %}<span class="badge disabled">조회</span>{% endif %}
                   </td>

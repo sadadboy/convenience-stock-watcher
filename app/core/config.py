@@ -89,6 +89,8 @@ class Settings(BaseSettings):
 
     # Discord push alerts. Fallback if no webhook is saved in the UI.
     discord_webhook_url: str = ""
+    # Hour (KST, 0-23) of the daily "watcher is alive" Discord report; -1 = off.
+    daily_report_hour: int = 9
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -43,6 +43,9 @@ class StockWatch(Base):
     last_stock_status: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
     last_stock_quantity: Mapped[int | None] = mapped_column(Integer)
     last_in_stock_summary: Mapped[str | None] = mapped_column(Text)
+    # JSON {store_code: {"name", "qty"}} of in-stock stores as last announced, so
+    # alerts fire only when a store's stock changes (restock, quantity, sell-out).
+    alerted_stores: Mapped[str | None] = mapped_column(Text)
 
     alert_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -82,7 +85,7 @@ class StockWatchEvent(Base):
         nullable=False,
         index=True,
     )
-    # "restock" (alert), "check", "error".
+    # "restock", "quantity", "sold_out" (alerts), "check", "error".
     kind: Mapped[str] = mapped_column(String(40), nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False)
     quantity: Mapped[int | None] = mapped_column(Integer)

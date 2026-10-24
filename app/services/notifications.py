@@ -7,14 +7,31 @@ runs in a background scheduler thread. Never raises; returns (ok, error).
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _USERNAME = "편의점 재고 알리미"
-_COLOR_RESTOCK = 0x2ECC71  # green
+COLOR_RESTOCK = 0x2ECC71  # green
+COLOR_SOLD_OUT = 0x95A5A6  # gray
+COLOR_WARNING = 0xE67E22  # orange
 _TIMEOUT = 10.0
+
+
+_BRAND_NAMES = {"gs25": "GS25", "cu": "CU", "seveneleven": "세븐일레븐", "emart24": "이마트24"}
+
+
+def store_map_link(name: str, address: str | None, brand: str) -> str:
+    """Discord markdown link opening the store in Kakao Map.
+
+    Searches by address when known (unique, unlike store names such as
+    "강남점"), else by brand + store name.
+    """
+    query = (address or "").strip() or f"{_BRAND_NAMES.get(brand, brand)} {name}"
+    label = name.replace("[", "(").replace("]", ")")
+    return f"[{label}](https://map.kakao.com/link/search/{quote(query)})"
 
 
 def send_discord_message(
@@ -22,7 +39,7 @@ def send_discord_message(
     title: str,
     message: str,
     *,
-    color: int = _COLOR_RESTOCK,
+    color: int = COLOR_RESTOCK,
 ) -> tuple[bool, str | None]:
     """Post an embed to a Discord webhook. Returns (ok, error_message)."""
     url = (webhook_url or "").strip()

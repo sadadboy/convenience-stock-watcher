@@ -19,6 +19,9 @@ _COLUMN_MIGRATIONS = (
     "ALTER TABLE stock_watches ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION",
     "ALTER TABLE stock_watches ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION",
     "ALTER TABLE stock_watches ADD COLUMN IF NOT EXISTS radius_meters INTEGER",
+    "ALTER TABLE stock_watches ADD COLUMN IF NOT EXISTS alerted_stores TEXT",
+    # Watches no longer pause after N alerts; wake any left paused by the old rule.
+    "UPDATE stock_watches SET status = 'active', paused_until = NULL WHERE status = 'paused'",
 )
 
 

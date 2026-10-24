@@ -202,7 +202,6 @@ def _tally(watches: list[StockWatch]) -> dict:
         "paused": sum(1 for w in watches if w.status == "paused"),
         "watch_ids": ",".join(str(w.id) for w in watches),
         "interval": watches[0].check_interval_seconds,
-        "max_alert_count": watches[0].max_alert_count,
     }
 
 
@@ -284,20 +283,17 @@ def update_watches_settings(
     watch_ids: str,
     *,
     check_interval_seconds: int,
-    max_alert_count: int,
 ) -> int:
-    """Update interval / max-alert for a group of watches, re-staggering checks."""
+    """Update the check interval for a group of watches, re-staggering checks."""
     ids = _parse_ids(watch_ids)
     if not ids:
         return 0
     interval = max(check_interval_seconds, 30)
-    max_alerts = max(max_alert_count, 1)
     watches = list(db.scalars(select(StockWatch).where(StockWatch.id.in_(ids))))
     now = datetime.now(timezone.utc)
     step = interval / len(watches) if watches else 0
     for i, watch in enumerate(watches):
         watch.check_interval_seconds = interval
-        watch.max_alert_count = max_alerts
         # Re-spread the next checks across the new interval.
         watch.next_check_at = now + timedelta(seconds=step * i)
     db.commit()

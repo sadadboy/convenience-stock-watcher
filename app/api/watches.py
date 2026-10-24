@@ -199,15 +199,9 @@ async def delete_group(watch_ids: str = Form(...), db: Session = Depends(get_db)
 async def update_group_settings(
     watch_ids: str = Form(...),
     check_interval_seconds: int = Form(...),
-    max_alert_count: int = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    update_watches_settings(
-        db,
-        watch_ids,
-        check_interval_seconds=check_interval_seconds,
-        max_alert_count=max_alert_count,
-    )
+    update_watches_settings(db, watch_ids, check_interval_seconds=check_interval_seconds)
     return RedirectResponse(url="/watches", status_code=303)
 
 

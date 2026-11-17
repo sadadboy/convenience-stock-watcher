@@ -1,7 +1,7 @@
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -134,3 +134,12 @@ async def logout_action(request: Request, db: Session = Depends(get_db)) -> Redi
 def login_redirect(request: Request) -> RedirectResponse:
     path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
     return RedirectResponse(url=f"/login?next={quote(path)}", status_code=303)
+
+
+@router.get("/auth/device-check", status_code=204)
+def device_check() -> Response:
+    """다른 서비스(valet 등)가 기기 쿠키를 확인할 때 쓴다.
+
+    require_trusted_device 미들웨어를 통과해야만 여기 도달하므로 204 = 등록된 기기.
+    """
+    return Response(status_code=204)

@@ -47,6 +47,7 @@ http://localhost:8000
 - `docs/PRD.md`
 - `docs/DATA_MODEL.md`
 - `docs/SCHEDULER.md`
+- `docs/SHARED_DEVICE_AUTH.md` — 같은 서버의 다른 앱에서 이 앱의 기기 인증을 같이 쓰는 방법
 
 ## Next Development Tasks
 

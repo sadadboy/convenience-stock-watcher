@@ -2,13 +2,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.templating import templates
 from app.db.session import get_db
 from app.models.device import TrustedDevice
+from app.models.login_attempt import LoginAttempt
 from app.services.auth import (
     COOKIE_NAME,
     auth_configured,
@@ -20,6 +21,7 @@ from app.services.auth import (
     register_device,
     safe_next,
 )
+from app.services.login_audit import record_attempt
 
 router = APIRouter(tags=["auth"])
 
@@ -58,10 +60,12 @@ async def login_action(
     db: Session = Depends(get_db),
 ):
     ip = _client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
     next_path = safe_next(next)
     if not auth_configured():
         return _login_page(request, next_path=next_path, status_code=503)
     if is_locked_out(ip):
+        record_attempt(db, ip=ip, user_agent=user_agent, result="locked", password=password, device_name=device_name)
         return _login_page(
             request,
             next_path=next_path,
@@ -69,12 +73,14 @@ async def login_action(
             status_code=429,
         )
     if not check_password(ip, password):
+        record_attempt(db, ip=ip, user_agent=user_agent, result="failed", password=password, device_name=device_name)
         return _login_page(request, next_path=next_path, error="비밀번호가 틀렸습니다.", status_code=401)
 
+    record_attempt(db, ip=ip, user_agent=user_agent, result="success", password=None, device_name=device_name)
     token = register_device(
         db,
-        name=device_name or guess_device_name(request.headers.get("user-agent", "")),
-        user_agent=request.headers.get("user-agent", ""),
+        name=device_name or guess_device_name(user_agent),
+        user_agent=user_agent,
         ip=ip,
     )
     response = RedirectResponse(url=next_path, status_code=303)
@@ -96,6 +102,28 @@ async def devices_page(request: Request, db: Session = Depends(get_db)) -> HTMLR
     return templates.TemplateResponse(
         "devices.html",
         {"request": request, "devices": devices, "current_id": current.id if current else None},
+    )
+
+
+@router.get("/login-attempts", response_class=HTMLResponse)
+async def login_attempts_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    """Recent /login attempts (registered devices only, via the auth middleware)."""
+    attempts = list(db.scalars(select(LoginAttempt).order_by(LoginAttempt.created_at.desc()).limit(300)))
+    by_ip = db.execute(
+        select(
+            LoginAttempt.ip,
+            func.count().filter(LoginAttempt.result != "success").label("fails"),
+            func.count().filter(LoginAttempt.result == "success").label("successes"),
+            func.min(LoginAttempt.created_at).label("first_at"),
+            func.max(LoginAttempt.created_at).label("last_at"),
+        )
+        .group_by(LoginAttempt.ip)
+        .order_by(func.max(LoginAttempt.created_at).desc())
+        .limit(100)
+    ).all()
+    return templates.TemplateResponse(
+        "login_attempts.html",
+        {"request": request, "attempts": attempts, "by_ip": by_ip},
     )
 
 

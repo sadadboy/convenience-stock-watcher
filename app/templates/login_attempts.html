@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>로그인 시도 기록 · Convenience Stock Watcher</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #1f2937;
+        background: #f6f7f9;
+      }
+
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 20px;
+      }
+
+      nav {
+        margin-bottom: 20px;
+      }
+
+      a {
+        color: #2563eb;
+        text-decoration: none;
+      }
+
+      h1 {
+        margin: 0 0 20px;
+        font-size: 28px;
+      }
+
+      .panel {
+        border: 1px solid #dfe3e8;
+        border-radius: 8px;
+        padding: 16px;
+        background: #ffffff;
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e5e7eb;
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: #4b5563;
+        font-size: 13px;
+      }
+
+      .muted {
+        color: #6b7280;
+        font-size: 13px;
+      }
+
+      .badge {
+        display: inline-flex;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #065f46;
+        background: #d1fae5;
+      }
+
+      .bar {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .danger {
+        color: #7f1d1d;
+        background: #fee2e2;
+      }
+
+      .secondary {
+        color: #1f2937;
+        background: #e5e7eb;
+      }
+
+      input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+      }
+      .fail { color: #7f1d1d; background: #fee2e2; }
+      .locked { color: #7c2d12; background: #ffedd5; }
+      .ok { color: #065f46; background: #d1fae5; }
+      code { word-break: break-all; }
+      h2 { font-size: 18px; margin: 24px 0 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav><a href="/">← Dashboard</a> · <a href="/devices">등록된 기기</a></nav>
+      <h1>로그인 시도 기록</h1>
+      <section class="panel">
+        <p class="muted">로그인 페이지에 들어온 시도입니다 (최근 180일). 틀린 비밀번호는 그대로 보여주지만, 실제 비밀번호와 비슷한 입력(본인 오타일 가능성)은 저장하지 않습니다. 성공한 로그인의 비밀번호는 저장하지 않습니다.</p>
+        <h2>IP별 요약</h2>
+        <table>
+          <thead><tr><th>IP</th><th>실패</th><th>성공</th><th>처음</th><th>마지막</th></tr></thead>
+          <tbody>
+            {% for row in by_ip %}
+              <tr>
+                <td><a href="https://ipinfo.io/{{ row.ip }}" target="_blank" rel="noopener noreferrer">{{ row.ip }}</a></td>
+                <td>{{ row.fails }}</td>
+                <td>{{ row.successes }}</td>
+                <td>{{ row.first_at | kst }}</td>
+                <td>{{ row.last_at | kst }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="5" class="muted">기록이 없습니다.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <h2>최근 시도 (최대 300건)</h2>
+        <table>
+          <thead><tr><th>시각</th><th>결과</th><th>입력한 비밀번호</th><th>IP · 기기</th></tr></thead>
+          <tbody>
+            {% for a in attempts %}
+              <tr>
+                <td>{{ a.created_at | kst }}</td>
+                <td>
+                  {% if a.result == "success" %}<span class="badge ok">성공</span>
+                  {% elif a.result == "locked" %}<span class="badge locked">잠금 중</span>
+                  {% else %}<span class="badge fail">실패</span>{% endif %}
+                </td>
+                <td>
+                  {% if a.attempted_password is not none %}<code>{{ a.attempted_password }}</code>
+                  {% elif a.password_note == "similar_to_real" %}<span class="muted">실제 비밀번호와 비슷함 (저장 안 함)</span>
+                  {% else %}<span class="muted">-</span>{% endif %}
+                  {% if a.device_name %}<div class="muted">기기 이름 입력: {{ a.device_name }}</div>{% endif %}
+                </td>
+                <td>
+                  <a href="https://ipinfo.io/{{ a.ip }}" target="_blank" rel="noopener noreferrer">{{ a.ip }}</a>
+                  <div class="muted">{{ a.user_agent[:120] }}</div>
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="4" class="muted">기록이 없습니다.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>

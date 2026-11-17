@@ -45,12 +45,22 @@ check target
   -> status = failed
   -> failure_count += 1
   -> last_error = error message
-  -> next_retry_at = now + failure_retry_seconds
-  -> on the first failure only: ⚠️ 조회 실패 alert
+  -> next_retry_at = now + check_interval * 2^(failure_count-1), capped at failure_retry_seconds
+     (5 -> 10 -> 20 -> 40 -> 60 min with the defaults)
+  -> on the 3rd failure in a row (~15 min): queue ⚠️ 조회 실패
 ```
 
+Failure and recovery notices are held for one check interval (5 min) and sent
+as one Discord message per brand, so an outage across 45 watches is one ⚠️ and
+one ✅, not 90 messages. A blip that recovers before the 3rd failure sends
+nothing; a watch that recovers while its ⚠️ is still held cancels it.
+Watches still failing are grouped by brand + error in the daily report.
+
+Errors are labelled by kind: 4xx = API changed or bad product code (needs a
+fix), 5xx = brand server error, timeout, or connection failure.
+
 `alerted_stores` is kept across failures; the first successful check after a
-failure reports any changes, or sends ✅ 조회 복구 with the current state.
+failure reports any changes, or sends ✅ 조회 복구 (only if ⚠️ was sent).
 
 ## Manual Resume
 

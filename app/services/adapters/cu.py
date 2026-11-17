@@ -26,6 +26,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.store_adapter import (
+    describe_lookup_error,
     InventoryResult,
     ProductCandidate,
     SearchPage,
@@ -255,7 +256,7 @@ async def check_cu_stock(
             rows = await _fetch_stores(client, code, latitude, longitude)
     except httpx.HTTPError as exc:
         logger.warning("CU stock lookup network error for item_cd %s: %s", code, exc)
-        return _result(ok=False, error="CU 재고 조회 네트워크 오류가 발생했습니다.")
+        return _result(ok=False, error=describe_lookup_error("CU", exc))
     except ValueError as exc:
         logger.warning("CU stock lookup returned invalid JSON for item_cd %s: %s", code, exc)
         return _result(ok=False, error="CU 재고 응답을 해석하지 못했습니다.")

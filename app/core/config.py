@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     emart24_stock_enabled: bool = True
     emart24_web_base_url: str = "https://emart24.co.kr"
     emart24_store_search_path: str = "/api1/store"
-    emart24_stock_search_path: str = "/api/stock/v2/stock-search/store"
+    emart24_stock_search_path: str = "/api/stock/v3/stock-search/store"
     emart24_store_limit: int = 30
     emart24_default_store_keyword: str = "강남"
 

@@ -18,6 +18,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.store_adapter import (
+    describe_lookup_error,
     InventoryResult,
     ProductCandidate,
     SearchPage,
@@ -219,6 +220,9 @@ async def _fetch_stores(client: httpx.AsyncClient, store_keyword: str, limit: in
     return stores
 
 
+_PLACEHOLDER_QTY = 9999
+
+
 async def _fetch_stock_qty(client: httpx.AsyncClient, plu_code: str, biz_nos: list[str]) -> dict[str, int]:
     """Fetch per-store quantities. Returns {bizNo: quantity}."""
     url = settings.emart24_base_url.rstrip("/") + settings.emart24_stock_search_path
@@ -237,7 +241,11 @@ async def _fetch_stock_qty(client: httpx.AsyncClient, plu_code: str, biz_nos: li
             continue
         biz_no = str(row.get("BIZNO") or "").strip()
         if biz_no:
-            quantities[biz_no] = _to_int(row.get("BIZQTY"))
+            qty = _to_int(row.get("BIZQTY"))
+            # v3 reports 9999 for some unreleased/untracked items (e.g. the
+            # Pokémon 30th pack at nearly every store). Not a real count, so
+            # treat it as no stock rather than fire a false restock alert.
+            quantities[biz_no] = 0 if qty >= _PLACEHOLDER_QTY else qty
     return quantities
 
 
@@ -304,7 +312,7 @@ async def check_emart24_stock(
             quantities = await _fetch_stock_qty(client, code, list(stores.keys()))
     except httpx.HTTPError as exc:
         logger.warning("Emart24 stock lookup network error for pluCd %s: %s", code, exc)
-        return _result(ok=False, error="Emart24 재고 조회 네트워크 오류가 발생했습니다.")
+        return _result(ok=False, error=describe_lookup_error("이마트24", exc))
     except ValueError as exc:
         logger.warning("Emart24 stock lookup returned invalid JSON for pluCd %s: %s", code, exc)
         return _result(ok=False, error="Emart24 재고 응답을 해석하지 못했습니다.")

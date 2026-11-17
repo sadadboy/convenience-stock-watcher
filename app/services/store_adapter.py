@@ -147,3 +147,24 @@ class ConvenienceStoreAdapter(Protocol):
         radius_meters: int | None = None,
     ) -> InventoryResult:
         ...
+
+
+def describe_lookup_error(brand_label: str, exc: Exception) -> str:
+    """User-facing message for a failed stock lookup, by failure kind.
+
+    4xx means our request no longer matches the API (endpoint moved or bad
+    product code) and needs fixing; 5xx and timeouts are the brand's side and
+    usually pass on their own.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (403, 429):
+            return f"{brand_label} 접속 차단 (HTTP {status}) · 요청이 너무 많아 잠시 막힘"
+        if 400 <= status < 500:
+            return f"{brand_label} 재고 조회 거부 (HTTP {status}) · API 변경 또는 잘못된 상품코드"
+        return f"{brand_label} 서버 오류 (HTTP {status})"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"{brand_label} 응답 시간 초과"
+    return f"{brand_label} 연결 실패 (네트워크)"

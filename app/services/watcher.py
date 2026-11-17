@@ -4,8 +4,12 @@ Watches never pause on stock. Alerts fire on per-store *changes* only: a store
 that newly has stock (🔔 입고), an announced store whose quantity changed
 (📉/📈 재고 변동), and an announced store that sold out (⚪ 품절). So silence on
 Discord always means "same as the last message", quantities included.
-Lookup failures are announced once too, so they can't pass for silence.
-Alerts go to the app log, ``stock_watch_events`` (/watches screen) and Discord.
+Lookup failures can't pass for silence either, but blips must not spam: a
+failing watch retries with backoff (5 -> 10 -> 20 -> ... -> failure_retry_seconds)
+and is announced only once it has failed ``FAILURE_ALERT_AFTER`` times in a row
+(~15 min). Failures and recoveries from one scheduler tick are grouped into a
+single Discord message per brand. Watches still failing show up in the daily
+report. Alerts go to the app log, ``stock_watch_events`` and Discord.
 """
 
 from __future__ import annotations
@@ -13,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -27,6 +33,7 @@ from app.services.notifications import (
     COLOR_RESTOCK,
     COLOR_SOLD_OUT,
     COLOR_WARNING,
+    brand_display_name,
     send_discord_message,
     store_map_link,
 )
@@ -43,6 +50,109 @@ def _push_discord(db: Session, title: str, message: str, *, color: int, watch_id
     ok, error = send_discord_message(webhook, title, message, color=color)
     if not ok:
         logger.warning("Discord push failed for watch %s: %s", watch_id, error)
+
+
+# Consecutive failures before a watch's failure is announced. With 5-min checks
+# the retries land at +5 and +15 min, so this is "still failing after ~15 min".
+FAILURE_ALERT_AFTER = 3
+
+
+def failure_retry_delay(watch: StockWatch) -> timedelta:
+    """Backoff after the Nth consecutive failure: interval * 2^(N-1), capped."""
+    base = max(watch.check_interval_seconds, 60)
+    exponent = min(max(watch.failure_count - 1, 0), 10)
+    return timedelta(seconds=min(base * 2**exponent, max(watch.failure_retry_seconds, base)))
+
+
+@dataclass
+class _Notice:
+    watch_id: int
+    brand: str
+    label: str
+    error: str | None
+    at: datetime
+
+
+class HealthBatch:
+    """Failure / recovery notices, held briefly and sent grouped by brand.
+
+    One outage hits every watch of a brand, but their checks are spread over a
+    whole check interval, so they cross the threshold in different ticks. A
+    brand's notices are held until the first one is ``hold`` old, then sent as
+    one message. Plain strings only: the watches are detached by then.
+    """
+
+    def __init__(self, hold: timedelta = timedelta(0)) -> None:
+        self.hold = hold
+        self.failed: dict[str, list[_Notice]] = defaultdict(list)
+        self.recovered: dict[str, list[_Notice]] = defaultdict(list)
+
+    def add_failed(self, watch: StockWatch, error: str, now: datetime) -> None:
+        self.failed[watch.source.brand].append(_Notice(watch.id, watch.source.brand, _short_label(watch), error, now))
+
+    def add_recovered(self, watch: StockWatch, now: datetime) -> None:
+        label = _short_label(watch)
+        pending = self.failed.get(watch.source.brand, [])
+        if any(n.watch_id == watch.id for n in pending):
+            # Failure not sent yet: it recovered within the hold, say nothing.
+            self.failed[watch.source.brand] = [n for n in pending if n.watch_id != watch.id]
+            return
+        self.recovered[watch.source.brand].append(_Notice(watch.id, watch.source.brand, label, None, now))
+
+    def _ready(self, notices: list[_Notice], now: datetime) -> bool:
+        return bool(notices) and now - min(n.at for n in notices) >= self.hold
+
+    def flush(self, db: Session, now: datetime) -> None:
+        for brand in list(self.failed):
+            items = self.failed[brand]
+            if not self._ready(items, now):
+                continue
+            by_error: dict[str, list[str]] = defaultdict(list)
+            for n in items:
+                by_error[n.error or "재고 조회 실패"].append(n.label)
+            lines = []
+            for error, labels in by_error.items():
+                lines.append(f"**{error}** · 감시 {len(labels)}개")
+                lines += _cap_lines(labels)
+            lines.append(
+                "\n15분 넘게 계속 실패 중이에요. 점점 간격을 늘려 최대 1시간마다 재시도하고, "
+                "복구되기 전까지는 재고 알림이 오지 않아요. 계속 실패하면 매일 09시 보고에 남아요."
+            )
+            _push_discord(
+                db,
+                f"⚠️ {brand_display_name(brand)} 조회 실패 · 감시 {len(items)}개",
+                "\n".join(lines),
+                color=COLOR_WARNING,
+                watch_id=0,
+            )
+            del self.failed[brand]
+        for brand in list(self.recovered):
+            items = self.recovered[brand]
+            if not self._ready(items, now):
+                continue
+            _push_discord(
+                db,
+                f"✅ {brand_display_name(brand)} 조회 복구 · 감시 {len(items)}개",
+                "\n".join(_cap_lines([n.label for n in items]) + ["\n변동이 있으면 평소처럼 알림이 와요."]),
+                color=COLOR_RESTOCK,
+                watch_id=0,
+            )
+            del self.recovered[brand]
+
+
+# Shared across scheduler ticks (a single scheduler thread runs them).
+_tick_notices = HealthBatch(hold=timedelta(seconds=settings.watcher_default_interval_seconds))
+
+
+def _short_label(watch: StockWatch) -> str:
+    return f"{watch.source.external_product_name} ({watch.location_query or '전국'})"
+
+
+def _cap_lines(labels: list[str], limit: int = 10) -> list[str]:
+    lines = [f"• {label}" for label in labels[:limit]]
+    if len(labels) > limit:
+        lines.append(f"… 외 {len(labels) - limit}개")
+    return lines
 
 
 def _watch_label(watch: StockWatch) -> str:
@@ -114,7 +224,11 @@ def _summarize(
 def check_watch(db: Session, watch: StockWatch, *, now: datetime | None = None) -> StockWatchEvent:
     """Run one stock check for a watch, update it, and record an event."""
     now = now or datetime.now(timezone.utc)
-    return _apply_result(db, watch, asyncio.run(_lookup_stock(watch)), now=now)
+    # Manual check: report its own failure/recovery right away.
+    batch = HealthBatch()
+    event = _apply_result(db, watch, asyncio.run(_lookup_stock(watch)), now=now, batch=batch)
+    batch.flush(db, now)
+    return event
 
 
 def _apply_result(
@@ -123,6 +237,7 @@ def _apply_result(
     result: StockLookup | None,
     *,
     now: datetime,
+    batch: HealthBatch,
 ) -> StockWatchEvent:
     """Persist one lookup result: update the watch, record an event, alert."""
     source = watch.source
@@ -141,23 +256,16 @@ def _apply_result(
         watch.last_error = message
         watch.status = WatchStatus.FAILED.value
         watch.next_check_at = None
-        watch.next_retry_at = now + _seconds(watch.failure_retry_seconds)
+        watch.next_retry_at = now + failure_retry_delay(watch)
         event = _add_event(db, watch, kind="error", status="failed", quantity=None, message=message)
-        logger.warning("watch %s failed: %s", watch.id, message)
-        if watch.failure_count == 1:
-            retry_min = max(watch.failure_retry_seconds // 60, 1)
-            _push_discord(
-                db,
-                f"⚠️ 조회 실패 {_watch_label(watch)}",
-                f"{message}\n{retry_min}분 후 다시 시도합니다. 복구되기 전까지는 재고 알림이 오지 않아요.\n"
-                + _watch_footer(watch),
-                color=COLOR_WARNING,
-                watch_id=watch.id,
-            )
+        logger.warning("watch %s failed (%d in a row): %s", watch.id, watch.failure_count, message)
+        if watch.failure_count == FAILURE_ALERT_AFTER:
+            batch.add_failed(watch, message, now)
         db.commit()
         return event
 
-    recovered = watch.failure_count > 0
+    # Only announce a recovery if the failure itself was announced.
+    recovered = watch.failure_count >= FAILURE_ALERT_AFTER
     watch.last_error = None
     watch.failure_count = 0
     watch.status = WatchStatus.ACTIVE.value
@@ -253,13 +361,7 @@ def _apply_result(
             watch_id=watch.id,
         )
     if recovered and not events:
-        _push_discord(
-            db,
-            f"✅ 조회 복구 {_watch_label(watch)}",
-            f"{now_line}\n{footer}",
-            color=COLOR_RESTOCK if current else COLOR_SOLD_OUT,
-            watch_id=watch.id,
-        )
+        batch.add_recovered(watch, now)
     if not events:
         message = (
             f"재고 유지 {len(current)}개 매장 · {summary} ({result.context})"
@@ -315,7 +417,9 @@ def run_due_watches(db: Session, *, now: datetime | None = None) -> int:
     cap = settings.watcher_max_checks_per_tick
     if cap and cap > 0:
         due = due[:cap]
+    batch = _tick_notices
     if not due:
+        batch.flush(db, now)
         return 0
 
     for watch in due:
@@ -335,11 +439,12 @@ def run_due_watches(db: Session, *, now: datetime | None = None) -> int:
             logger.exception("watch %s lookup crashed", watch.id, exc_info=result)
             continue
         try:
-            _apply_result(db, watch, result, now=now)
+            _apply_result(db, watch, result, now=now, batch=batch)
             checked += 1
         except Exception:  # noqa: BLE001 - never let one watch break the loop
             db.rollback()
             logger.exception("watch %s check crashed", watch.id)
+    batch.flush(db, now)
     return checked
 
 
@@ -352,12 +457,6 @@ def _is_due(watch: StockWatch, now: datetime) -> bool:
     if status == WatchStatus.PAUSED.value:
         return watch.paused_until is not None and watch.paused_until <= now
     return False
-
-
-def _seconds(seconds: int):
-    from datetime import timedelta
-
-    return timedelta(seconds=seconds)
 
 
 def _add_event(

@@ -22,6 +22,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.store_adapter import (
+    describe_lookup_error,
     InventoryResult,
     ProductCandidate,
     SearchPage,
@@ -260,7 +261,7 @@ async def check_gs25_stock(
         return _result(ok=False, error="GS25 재고 조회 중 오류가 발생했습니다.")
     except httpx.HTTPError as exc:
         logger.warning("GS25 stock lookup network error for itemCode %s: %s", code, exc)
-        return _result(ok=False, error="GS25 재고 조회 네트워크 오류가 발생했습니다.")
+        return _result(ok=False, error=describe_lookup_error("GS25", exc))
     except ValueError as exc:
         logger.warning("GS25 stock lookup returned invalid JSON for itemCode %s: %s", code, exc)
         return _result(ok=False, error="GS25 재고 응답을 해석하지 못했습니다.")

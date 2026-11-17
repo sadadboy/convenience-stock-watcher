@@ -23,6 +23,10 @@ _TIMEOUT = 10.0
 _BRAND_NAMES = {"gs25": "GS25", "cu": "CU", "seveneleven": "세븐일레븐", "emart24": "이마트24"}
 
 
+def brand_display_name(brand: str) -> str:
+    return _BRAND_NAMES.get(brand, brand)
+
+
 def store_map_link(name: str, address: str | None, brand: str) -> str:
     """Discord markdown link opening the store in Kakao Map.
 

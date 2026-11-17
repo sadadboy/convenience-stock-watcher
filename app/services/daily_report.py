@@ -20,10 +20,11 @@ from app.repositories.notifications import get_discord_webhook
 from app.services.notifications import (
     COLOR_RESTOCK,
     COLOR_WARNING,
+    brand_display_name,
     send_discord_message,
     store_map_link,
 )
-from app.services.watcher import load_alerted_stores
+from app.services.watcher import FAILURE_ALERT_AFTER, load_alerted_stores
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,15 @@ def build_daily_report(db: Session, *, now: datetime | None = None) -> tuple[str
     watches = db.scalars(select(StockWatch).options(selectinload(StockWatch.source))).all()
 
     disabled = [w for w in watches if w.status == WatchStatus.DISABLED.value]
-    failed = [w for w in watches if w.status == WatchStatus.FAILED.value]
+    # A watch that failed once or twice is mid-retry, not a problem yet.
+    failed = [
+        w for w in watches
+        if w.status == WatchStatus.FAILED.value and w.failure_count >= FAILURE_ALERT_AFTER
+    ]
+    retrying = [
+        w for w in watches
+        if w.status == WatchStatus.FAILED.value and w.failure_count < FAILURE_ALERT_AFTER
+    ]
     running = [w for w in watches if w.status == WatchStatus.ACTIVE.value]
     stale = [w for w in running if _is_stale(w, now)]
 
@@ -77,14 +86,20 @@ def build_daily_report(db: Session, *, now: datetime | None = None) -> tuple[str
     title = "⚠️ 감시 상태 확인 필요" if problems else "✅ 감시 정상 동작 중"
     lines = [
         f"{now.astimezone(KST):%m-%d %H:%M} 기준 · 감시 {len(watches)}개 "
-        f"(정상 {len(running) - len(stale)} · 실패 {len(failed)} · 지연 {len(stale)} · 중지 {len(disabled)})",
+        f"(정상 {len(running) - len(stale)} · 실패 {len(failed)} · 지연 {len(stale)} · 중지 {len(disabled)}"
+        + (f" · 재시도 중 {len(retrying)}" if retrying else "")
+        + ")",
         "",
         "**재고 있는 곳**",
         *(_cap(in_stock_lines) or ["없음 · 계속 감시 중"]),
     ]
     if failed:
         lines += ["", "**조회 실패** (재시도 중, 그동안 재고 알림 없음)"]
-        lines += _cap([f"• {_label(w)}: {w.last_error or '알 수 없는 오류'}" for w in failed])
+        groups: dict[tuple[str, str], list[StockWatch]] = {}
+        for w in failed:
+            groups.setdefault((w.source.brand, w.last_error or "알 수 없는 오류"), []).append(w)
+        for (brand, error), ws in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            lines.append(f"• {brand_display_name(brand)} {len(ws)}개: {error} (연속 실패 최대 {max(w.failure_count for w in ws)}회)")
     if stale:
         lines += ["", "**조회 지연** (예정보다 오래 조회 안 됨)"]
         lines += _cap([

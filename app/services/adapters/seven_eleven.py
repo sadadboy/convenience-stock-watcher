@@ -12,6 +12,7 @@ gracefully instead of raising.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.store_adapter import (
+    describe_lookup_error,
     InventoryResult,
     ProductCandidate,
     SearchPage,
@@ -254,7 +256,30 @@ async def _fetch_stores(client: httpx.AsyncClient, store_keyword: str, limit: in
     return stores
 
 
+# Since 2026-11 real-stock rejects any storeList longer than one store (HTTP 400
+# "정상적인 점포 조회 요청이 아닙니다."), so stores are queried one at a time.
+_REAL_STOCK_CONCURRENCY = 2
+
+
 async def _fetch_real_stock(client: httpx.AsyncClient, meta: dict, store_codes: list[str]) -> dict[str, int]:
+    """Real-stock for the given stores, one request per store. Returns {storeCd: quantity}.
+
+    Any store failing fails the whole lookup: a silently missing store would
+    read as "sold out" and fire a false alert.
+    """
+    semaphore = asyncio.Semaphore(_REAL_STOCK_CONCURRENCY)
+
+    async def one(store_code: str) -> dict[str, int]:
+        async with semaphore:
+            return await _fetch_real_stock_batch(client, meta, [store_code])
+
+    quantities: dict[str, int] = {}
+    for part in await asyncio.gather(*(one(code) for code in store_codes)):
+        quantities.update(part)
+    return quantities
+
+
+async def _fetch_real_stock_batch(client: httpx.AsyncClient, meta: dict, store_codes: list[str]) -> dict[str, int]:
     """POST real-stock for the given stores. Returns {storeCd: quantity}."""
     url = settings.seveneleven_base_url.rstrip("/") + settings.seveneleven_real_stock_path
     payload = {
@@ -347,7 +372,7 @@ async def check_seveneleven_stock(
             quantities = await _fetch_real_stock(client, meta, list(stores.keys()))
     except httpx.HTTPError as exc:
         logger.warning("7-Eleven stock lookup network error for itemCd %s: %s", code, exc)
-        return _result(ok=False, error="7-Eleven 재고 조회 네트워크 오류가 발생했습니다.")
+        return _result(ok=False, error=describe_lookup_error("세븐일레븐", exc))
     except ValueError as exc:
         logger.warning("7-Eleven stock lookup returned invalid JSON for itemCd %s: %s", code, exc)
         return _result(ok=False, error="7-Eleven 재고 응답을 해석하지 못했습니다.")
